@@ -69,6 +69,7 @@ BEGIN_MESSAGE_MAP(CSettingsPropertyPage, CPropertyPage)
 	ON_BN_CLICKED(IDC_MOUNTMANAGER, &CSettingsPropertyPage::OnClickedMountmanager)
 	ON_BN_CLICKED(IDC_RESETWARNINGS, &CSettingsPropertyPage::OnClickedResetwarnings)
 	ON_BN_CLICKED(IDC_ENABLE_SAVING_PASSWORDS, &CSettingsPropertyPage::OnClickedEnableSavingPasswords)
+	ON_BN_CLICKED(IDC_USE_IMPERSONATION, &CSettingsPropertyPage::OnClickedUseImpersonation)
 END_MESSAGE_MAP()
 
 
@@ -98,16 +99,19 @@ BOOL CSettingsPropertyPage::OnInitDialog()
 
 	bool bEnableSavingPasswords = theApp.GetProfileInt(L"Settings", L"EnableSavingPasswords", ENABLE_SAVING_PASSWORDS_DEFAULT) != 0;
 
-	return SetControls(nThreads, bufferblocks, cachettl, bCaseInsensitive, bMountManager, bEnableSavingPasswords);
+	bool bUseImpersonation = theApp.GetProfileInt(L"Settings", L"UseImpersonation", USE_IMPERSONATION_DEFAULT) != 0;
+
+	return SetControls(nThreads, bufferblocks, cachettl, bCaseInsensitive, bMountManager, bEnableSavingPasswords, bUseImpersonation);
 }
 
 
-BOOL CSettingsPropertyPage::SetControls(int nThreads, int bufferblocks, int cachettl, bool bCaseInsensitive, bool bMountManager, bool bEnableSavingPasswords)
+BOOL CSettingsPropertyPage::SetControls(int nThreads, int bufferblocks, int cachettl, bool bCaseInsensitive, bool bMountManager, bool bEnableSavingPasswords, bool bUseImpersonation)
 {
 
 	m_bCaseInsensitive =  bCaseInsensitive;
 	m_bMountManager = bMountManager;
 	m_bEnableSavingPasswords = bEnableSavingPasswords;
+	m_bUseImpersonation = bUseImpersonation;
 
 	int i;
 
@@ -180,6 +184,8 @@ BOOL CSettingsPropertyPage::SetControls(int nThreads, int bufferblocks, int cach
 	CheckDlgButton(IDC_MOUNTMANAGER, m_bMountManager ? 1 : 0);
 
 	CheckDlgButton(IDC_ENABLE_SAVING_PASSWORDS, m_bEnableSavingPasswords ? 1 : 0);
+
+	CheckDlgButton(IDC_USE_IMPERSONATION, m_bUseImpersonation ? 1 : 0);
 
 	return TRUE;  // return TRUE unless you set the focus to a control
 				  // EXCEPTION: OCX Property Pages should return FALSE
@@ -265,7 +271,7 @@ void CSettingsPropertyPage::OnBnClickedDefaults()
 {
 	// TODO: Add your control notification handler code here
 
-	SetControls(PER_FILESYSTEM_THREADS_DEFAULT, BUFFERBLOCKS_DEFAULT, CACHETTL_DEFAULT, CASEINSENSITIVE_DEFAULT, MOUNTMANAGER_DEFAULT, ENABLE_SAVING_PASSWORDS_DEFAULT);
+	SetControls(PER_FILESYSTEM_THREADS_DEFAULT, BUFFERBLOCKS_DEFAULT, CACHETTL_DEFAULT, CASEINSENSITIVE_DEFAULT, MOUNTMANAGER_DEFAULT, ENABLE_SAVING_PASSWORDS_DEFAULT, USE_IMPERSONATION_DEFAULT);
 
 	SaveSettings();
 }
@@ -275,7 +281,7 @@ void CSettingsPropertyPage::OnBnClickedRecommended()
 {
 	// TODO: Add your control notification handler code here
 
-	SetControls(PER_FILESYSTEM_THREADS_RECOMMENDED, BUFFERBLOCKS_RECOMMENDED, CACHETTL_RECOMMENDED, CASEINSENSITIVE_RECOMMENDED, MOUNTMANAGER_RECOMMENDED, ENABLE_SAVING_PASSWORDS_RECOMMENDED);
+	SetControls(PER_FILESYSTEM_THREADS_RECOMMENDED, BUFFERBLOCKS_RECOMMENDED, CACHETTL_RECOMMENDED, CASEINSENSITIVE_RECOMMENDED, MOUNTMANAGER_RECOMMENDED, ENABLE_SAVING_PASSWORDS_RECOMMENDED, USE_IMPERSONATION_RECOMMENDED);
 
 	SaveSettings();
 }
@@ -326,4 +332,18 @@ void CSettingsPropertyPage::OnClickedEnableSavingPasswords()
 			}
 		}
 	}
+}
+
+
+void CSettingsPropertyPage::OnClickedUseImpersonation()
+{
+	// TODO: Add your control notification handler code here
+
+	// TODO: Add your control notification handler code here
+
+	m_bUseImpersonation = !m_bUseImpersonation;
+
+	CheckDlgButton(IDC_USE_IMPERSONATION, m_bUseImpersonation ? 1 : 0);
+
+	theApp.WriteProfileInt(L"Settings", L"UseImpersonation", m_bUseImpersonation ? 1 : 0);
 }

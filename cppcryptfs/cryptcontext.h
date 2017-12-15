@@ -50,6 +50,7 @@ public:
 	EmeCryptContext m_eme;
 	SivContext m_siv;
 	int m_bufferblocks;
+	bool m_use_impersonation;
 	
 private:
 	bool m_caseinsensitive;

@@ -515,6 +515,8 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
   DWORD error = 0;
   SECURITY_ATTRIBUTES securityAttrib;
   ACCESS_MASK genericDesiredAccess;
+  // userTokenHandle is for Impersonate Caller User Option
+  HANDLE userTokenHandle;
 
 
   bool is_virtual = rt_is_virtual_file(GetContext(), FileName);
@@ -659,10 +661,28 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
     DbgPrint(L"\tUNKNOWN creationDisposition!\n");
   }
 
+  if (GetContext()->m_use_impersonation) {
+	  userTokenHandle = DokanOpenRequestorToken(DokanFileInfo);
+
+	  if (userTokenHandle == INVALID_HANDLE_VALUE) {
+		  DbgPrint(L"  DokanOpenRequestorToken failed\n");
+		  // Should we return some error?
+	  }
+  }
+
   if (DokanFileInfo->IsDirectory) {
     // It is a create directory request
     if (creationDisposition == CREATE_NEW ||
 		creationDisposition == OPEN_ALWAYS) {
+
+	  if (GetContext()->m_use_impersonation) {
+			// if g_ImpersonateCallerUser option is on, call the ImpersonateLoggedOnUser function.
+			if (!ImpersonateLoggedOnUser(userTokenHandle)) {
+				// handle the error if failed to impersonate
+				DbgPrint(L"\tImpersonateLoggedOnUser failed.\n");
+			}
+	  }
+
       if (!CreateDirectory(filePath, &securityAttrib)) {
         error = GetLastError();
 		if (error != ERROR_ALREADY_EXISTS ||
@@ -697,43 +717,13 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 		  }
 
 	  }
-    } else if (creationDisposition == OPEN_ALWAYS) {
 
-      if (!CreateDirectory(filePath, &securityAttrib)) {
-
-        error = GetLastError();
-
-        if (error != ERROR_ALREADY_EXISTS) {
-          DbgPrint(L"\terror code = %d\n\n", error);
-          status = ToNtStatus(error);
-        }
-      } else {
-		 
-		  if (!create_dir_iv(GetContext(), filePath)) {
-				error = GetLastError();
-				DbgPrint(L"\tcreate dir iv error code = %d\n\n", error);
-				status = ToNtStatus(error);
-		  }
-		  
-		  if (actual_encrypted.size() > 0) {
-			  if (!write_encrypted_long_name(filePath, actual_encrypted)) {
-				  error = GetLastError();
-				  DbgPrint(L"\twrite long name error code = %d\n\n", error);
-				  status = ToNtStatus(error);
-				  RemoveDirectory(filePath);
-			  }
-		  }
-
-		  if (GetContext()->IsCaseInsensitive()) {
-			  std::list<std::wstring> files;
-			  if (wcscmp(FileName, L"\\")) {
-				  files.push_front(L"..");
-				  files.push_front(L".");
-			  }
-			  GetContext()->m_case_cache.store(filePath.CorrectCasePath(), files);
-		  }
+	  if (GetContext()->m_use_impersonation) {
+		  // Clean Up operation for impersonate
+		  RevertToSelf();
 	  }
-    }
+
+    } 
 
     if (status == STATUS_SUCCESS) {
 	  //Check first if we're trying to open a file as a directory.
@@ -743,12 +733,26 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 			return STATUS_NOT_A_DIRECTORY;
 	   }
 
+	  if (GetContext()->m_use_impersonation) {
+		  // if g_ImpersonateCallerUser option is on, call the ImpersonateLoggedOnUser function.
+		  if (!ImpersonateLoggedOnUser(userTokenHandle)) {
+			  // handle the error if failed to impersonate
+			  DbgPrint(L"\tImpersonateLoggedOnUser failed.\n");
+		  }
+	  }
       // FILE_FLAG_BACKUP_SEMANTICS is required for opening directory handles
 		handle =
 			CreateFile(filePath, genericDesiredAccess, ShareAccess,
 				&securityAttrib, OPEN_EXISTING,
 
 			fileAttributesAndFlags | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+
+	  error = GetLastError();
+
+      if (GetCn) {
+			// Clean Up operation for impersonate
+			RevertToSelf();
+	  }
 
       if (handle == INVALID_HANDLE_VALUE) {
         error = GetLastError();
@@ -2097,7 +2101,7 @@ static DWORD WINAPI CryptThreadProc(
 }
 
 
-int mount_crypt_fs(WCHAR driveletter, const WCHAR *path, const WCHAR *config_path, const WCHAR *password, std::wstring& mes, bool readonly, bool reverse, int nThreads, int nBufferBlocks, int cachettl, bool caseinsensitve, bool mountmanager, bool mountmanagerwarn) 
+int mount_crypt_fs(WCHAR driveletter, const WCHAR *path, const WCHAR *config_path, const WCHAR *password, std::wstring& mes, bool readonly, bool reverse, int nThreads, int nBufferBlocks, int cachettl, bool caseinsensitve, bool mountmanager, bool mountmanagerwarn, bool use_impersontation) 
 {
 	mes.clear();
 
@@ -2190,6 +2194,8 @@ int mount_crypt_fs(WCHAR driveletter, const WCHAR *path, const WCHAR *config_pat
 		con->m_case_cache.SetTTL(cachettl);
 
 		con->SetCaseSensitive(caseinsensitve);
+
+		con->m_use_impersonation = use_impersontation && have_security_name_privilege();
 
 		CryptConfig *config = con->GetConfig();
 

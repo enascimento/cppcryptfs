@@ -310,8 +310,10 @@ CString CMountPropertyPage::Mount(LPCWSTR argPath, WCHAR argDriveLetter, LPCWSTR
 
 	bool bSavePassword = argDriveLetter == 0 && (IsDlgButtonChecked(IDC_SAVE_PASSWORD) != 0);
 
+	bool bUseImpersonation = theApp.GetProfileInt(L"Settings", L"UseImpersonation", USE_IMPERSONATION_DEFAULT) != 0;
+
 	theApp.DoWaitCursor(1);
-	int result = mount_crypt_fs(*(const WCHAR *)cdl, cpath, config_path, password.m_buf, error_mes, readonly, reverse, nThreads, bufferblocks, cachettl, bCaseInsensitive, bMountManager, bMountManagerWarn);
+	int result = mount_crypt_fs(*(const WCHAR *)cdl, cpath, config_path, password.m_buf, error_mes, readonly, reverse, nThreads, bufferblocks, cachettl, bCaseInsensitive, bMountManager, bMountManagerWarn, bUseImpersonation);
 	theApp.DoWaitCursor(-1);
 
 	if (result != 0) {

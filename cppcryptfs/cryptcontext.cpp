@@ -46,6 +46,8 @@ CryptContext::CryptContext()
 
 	m_caseinsensitive = false;
 
+	m_use_impersonation = false;
+
 	m_bufferblocks = 1;
 
 	if (!m_mountEvent)

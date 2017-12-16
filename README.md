@@ -225,8 +225,6 @@ If the Use impersonation setting is on and cppcryptfs is running as administrato
 
 This setting is not enabled in either the Default or Recommended settings.
 
-It will probably become enabled in the Recommended settings in a future release.
-
 **Defaults and Recommended**
 
 There are also two buttons: "Defaults" which changes all settings to the original cppcryptfs defaults, and "Recommended" which sets

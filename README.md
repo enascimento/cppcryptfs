@@ -221,7 +221,7 @@ This setting is not enabled in either the Default or Recommended settings.
 
 **Use impersonation**
 
-If the Use impersonation setting is on and cppcryptfs is running as administrator, then cppcryptfs will impersonate the calling user (e.g. you) before creating or opening files and directories.  This ensures that user cannot access or modify files or directories that he or she does not have permissions for.
+If the Use impersonation setting is on and cppcryptfs is running as administrator, then cppcryptfs will impersonate the calling user (e.g. you) before creating or opening files and directories.  This ensures that the user cannot access or modify files or directories that he or she does not have permissions for.
 
 This setting is not enabled in either the Default or Recommended settings.
 

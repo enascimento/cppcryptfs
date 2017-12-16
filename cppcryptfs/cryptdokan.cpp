@@ -516,7 +516,7 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
   SECURITY_ATTRIBUTES securityAttrib;
   ACCESS_MASK genericDesiredAccess;
   // userTokenHandle is for Impersonate Caller User Option
-  HANDLE userTokenHandle;
+  HANDLE userTokenHandle = NULL;
 
 
   bool is_virtual = rt_is_virtual_file(GetContext(), FileName);
@@ -749,7 +749,7 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 
 	  error = GetLastError();
 
-      if (GetCn) {
+      if (GetContext()->m_use_impersonation) {
 			// Clean Up operation for impersonate
 			RevertToSelf();
 	  }
@@ -820,6 +820,14 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 		  if (creationDisposition == TRUNCATE_EXISTING)
 			  genericDesiredAccess |= GENERIC_WRITE;
 
+		  if (GetContext()->m_use_impersonation) {
+			  // if g_ImpersonateCallerUser option is on, call the ImpersonateLoggedOnUser function.
+			  if (!ImpersonateLoggedOnUser(userTokenHandle)) {
+				  // handle the error if failed to impersonate
+				  DbgPrint(L"\tImpersonateLoggedOnUser failed.\n");
+			  }
+		  }
+
 		  DbgPrint(L"CreateFile 0x%08x, 0x%08x, 0x%08x, 0x%08x", genericDesiredAccess,
 			  ShareAccess, creationDisposition, fileAttributesAndFlags);
 		  
@@ -834,6 +842,11 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 	  }
 	
 	  status = ToNtStatus(GetLastError());
+
+	  if (GetContext()->m_use_impersonation) {
+		  // Clean Up operation for impersonate
+		  RevertToSelf();
+	  }
 
 	if (!is_virtual && handle == INVALID_HANDLE_VALUE) {
 		  error = GetLastError();

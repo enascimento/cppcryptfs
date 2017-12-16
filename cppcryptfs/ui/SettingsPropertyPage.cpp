@@ -47,6 +47,7 @@ CSettingsPropertyPage::CSettingsPropertyPage()
 	m_bCaseInsensitive = false;
 	m_bMountManager = false;
 	m_bEnableSavingPasswords = false;
+	m_bUseImpersonation = false;
 }
 
 CSettingsPropertyPage::~CSettingsPropertyPage()

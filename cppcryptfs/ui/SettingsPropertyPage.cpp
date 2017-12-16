@@ -261,10 +261,12 @@ void CSettingsPropertyPage::SaveSettings()
 	m_bCaseInsensitive = !m_bCaseInsensitive; // OnBnClickedCaseinsensitive() flips it
 	m_bMountManager = !m_bMountManager; // ditto
 	m_bEnableSavingPasswords = !m_bEnableSavingPasswords; // ditto
+	m_bUseImpersonation = !m_bUseImpersonation; // ditto
 
 	OnBnClickedCaseinsensitive();
 	OnClickedMountmanager();
 	OnClickedEnableSavingPasswords();
+	OnClickedUseImpersonation();
 }
 
 void CSettingsPropertyPage::OnBnClickedDefaults()

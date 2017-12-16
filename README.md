@@ -219,6 +219,14 @@ If the "Enable saved passwords" setting is changed from checked to unchecked, th
 
 This setting is not enabled in either the Default or Recommended settings.
 
+**Use impersonation**
+
+If the use impersonation setting is on and cppcryptfs is running as administrator, then cppcryptfs will impersonate the calling user (e.g. you) before creating or opening files and directories.  This ensures that user cannot access or modify files or directories that he or she does not have permissions for.
+
+This setting is not enabled in either the Default or Recommended settings.
+
+It will probably become enabled in the Recommended settings in a future release.
+
 **Defaults and Recommended**
 
 There are also two buttons: "Defaults" which changes all settings to the original cppcryptfs defaults, and "Recommended" which sets

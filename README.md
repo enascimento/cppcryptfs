@@ -204,7 +204,7 @@ e.g.
 
 ```
 
-cppcryptfs --list=d:\
+start /wait cppcryptfs --list=d:\
 
 
 ```

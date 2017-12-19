@@ -494,9 +494,21 @@ static BOOL AddSeSecurityNamePrivilege() {
     DbgPrint(L"\t" L#flag L"\n");                                              \
   }
 
-
-
-
+// the sole purpose of having this class is to make sure the user token handle gets closed.
+class UserTokenHandle {
+private:
+	HANDLE m_handle;
+public:
+	UserTokenHandle() { m_handle = NULL; }
+	void SetHandle(HANDLE h) { m_handle = h; }
+	HANDLE GetHandle() { return m_handle;  }
+	virtual ~UserTokenHandle()
+	{
+		if (m_handle != NULL && m_handle != INVALID_HANDLE_VALUE)
+			CloseHandle(m_handle);
+	}
+		
+};
 
 static NTSTATUS DOKAN_CALLBACK
 CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
@@ -516,7 +528,7 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
   SECURITY_ATTRIBUTES securityAttrib;
   ACCESS_MASK genericDesiredAccess;
   // userTokenHandle is for Impersonate Caller User Option
-  HANDLE userTokenHandle = NULL;
+  UserTokenHandle userTokenHandle;
 
 
   bool is_virtual = rt_is_virtual_file(GetContext(), FileName);
@@ -662,9 +674,9 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
   }
 
   if (GetContext()->m_use_impersonation) {
-	  userTokenHandle = DokanOpenRequestorToken(DokanFileInfo);
+	  userTokenHandle.SetHandle(DokanOpenRequestorToken(DokanFileInfo));
 
-	  if (userTokenHandle == INVALID_HANDLE_VALUE) {
+	  if (userTokenHandle.GetHandle() == INVALID_HANDLE_VALUE) {
 		  DbgPrint(L"  DokanOpenRequestorToken failed\n");
 		  // Should we return some error?
 	  }
@@ -677,7 +689,7 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 
 	  if (GetContext()->m_use_impersonation) {
 			// if g_ImpersonateCallerUser option is on, call the ImpersonateLoggedOnUser function.
-			if (!ImpersonateLoggedOnUser(userTokenHandle)) {
+			if (!ImpersonateLoggedOnUser(userTokenHandle.GetHandle())) {
 				// handle the error if failed to impersonate
 				DbgPrint(L"\tImpersonateLoggedOnUser failed.\n");
 			}
@@ -735,7 +747,7 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 
 	  if (GetContext()->m_use_impersonation) {
 		  // if g_ImpersonateCallerUser option is on, call the ImpersonateLoggedOnUser function.
-		  if (!ImpersonateLoggedOnUser(userTokenHandle)) {
+		  if (!ImpersonateLoggedOnUser(userTokenHandle.GetHandle())) {
 			  // handle the error if failed to impersonate
 			  DbgPrint(L"\tImpersonateLoggedOnUser failed.\n");
 		  }
@@ -822,7 +834,7 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
 
 		  if (GetContext()->m_use_impersonation) {
 			  // if g_ImpersonateCallerUser option is on, call the ImpersonateLoggedOnUser function.
-			  if (!ImpersonateLoggedOnUser(userTokenHandle)) {
+			  if (!ImpersonateLoggedOnUser(userTokenHandle.GetHandle())) {
 				  // handle the error if failed to impersonate
 				  DbgPrint(L"\tImpersonateLoggedOnUser failed.\n");
 			  }

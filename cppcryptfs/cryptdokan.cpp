@@ -501,7 +501,7 @@ private:
 public:
 	UserTokenHandle() { m_handle = NULL; }
 	void SetHandle(HANDLE h) { m_handle = h; }
-	HANDLE GetHandle() { return m_handle;  }
+	HANDLE GetHandle() { return m_handle; }
 	virtual ~UserTokenHandle()
 	{
 		if (m_handle != NULL && m_handle != INVALID_HANDLE_VALUE)

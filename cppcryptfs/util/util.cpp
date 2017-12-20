@@ -743,9 +743,3 @@ BOOL GetPathHash(LPCWSTR path, std::wstring& hashstr)
 	return TRUE;
 }
 
-AutoClosingHandle::~AutoClosingHandle()
-{
-	if (m_handle != NULL && m_handle != INVALID_HANDLE_VALUE)
-		CloseHandle(m_handle);
-}
-

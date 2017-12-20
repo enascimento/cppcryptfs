@@ -101,3 +101,15 @@ bool is_all_zeros(const BYTE *buf, size_t len);
 bool mountmanager_continue_mounting();
 
 BOOL GetPathHash(LPCWSTR path, std::wstring& hashstr);
+
+// closes handle automatically when it goes out of scope
+class AutoClosingHandle {
+private:
+	HANDLE m_handle;
+public:
+	AutoClosingHandle() { m_handle = NULL; }
+	AutoClosingHandle(HANDLE h) { m_handle = h; }
+	void SetHandle(HANDLE h) { m_handle = h; }
+	HANDLE GetHandle() { return m_handle; }
+	virtual ~AutoClosingHandle();
+};

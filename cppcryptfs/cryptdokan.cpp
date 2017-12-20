@@ -494,21 +494,6 @@ static BOOL AddSeSecurityNamePrivilege() {
     DbgPrint(L"\t" L#flag L"\n");                                              \
   }
 
-// the sole purpose of having this class is to make sure the user token handle gets closed.
-class UserTokenHandle {
-private:
-	HANDLE m_handle;
-public:
-	UserTokenHandle() { m_handle = NULL; }
-	void SetHandle(HANDLE h) { m_handle = h; }
-	HANDLE GetHandle() { return m_handle; }
-	virtual ~UserTokenHandle()
-	{
-		if (m_handle != NULL && m_handle != INVALID_HANDLE_VALUE)
-			CloseHandle(m_handle);
-	}
-		
-};
 
 static NTSTATUS DOKAN_CALLBACK
 CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
@@ -528,7 +513,7 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
   SECURITY_ATTRIBUTES securityAttrib;
   ACCESS_MASK genericDesiredAccess;
   // userTokenHandle is for Impersonate Caller User Option
-  UserTokenHandle userTokenHandle;
+  AutoClosingHandle userTokenHandle;
 
 
   bool is_virtual = rt_is_virtual_file(GetContext(), FileName);

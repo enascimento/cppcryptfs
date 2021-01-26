@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -45,11 +45,16 @@ handleErrors()
 	throw (-1);
 }
 
-
-
-void *get_crypt_context(int ivlen, int mode)
+static void free_crypt_context(EVP_CIPHER_CTX* ctx)
 {
-	EVP_CIPHER_CTX *ctx = NULL;
+	/* Clean up */
+	if (ctx)
+		EVP_CIPHER_CTX_free(ctx);
+}
+
+shared_ptr<EVP_CIPHER_CTX> get_crypt_context(int ivlen, int mode)
+{
+	EVP_CIPHER_CTX*ctx = NULL;
 
 	try {
 		/* Create and initialise the context */
@@ -80,27 +85,16 @@ void *get_crypt_context(int ivlen, int mode)
 	} catch (int) {
 		if (ctx)
 			EVP_CIPHER_CTX_free(ctx);
-		ctx = NULL;
+		ctx = nullptr;
 	}
 
-	return (void*)ctx;
+	return shared_ptr<EVP_CIPHER_CTX>(ctx, free_crypt_context);
 }
-
-void free_crypt_context(void *context)
-{
-	EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX*)context;
-
-	/* Clean up */
-	if (ctx)
-		EVP_CIPHER_CTX_free(ctx);
-}
-
 
 int encrypt(const unsigned char *plaintext, int plaintext_len, unsigned char *aad,
 	int aad_len, const unsigned char *key, const unsigned char *iv, 
-	unsigned char *ciphertext, unsigned char *tag, void *context)
-{
-	EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX*)context;
+	unsigned char *ciphertext, unsigned char *tag, EVP_CIPHER_CTX* ctx)
+{	
 
 	if (!ctx)
 		return -1;
@@ -148,9 +142,8 @@ int encrypt(const unsigned char *plaintext, int plaintext_len, unsigned char *aa
 
 int decrypt(const unsigned char *ciphertext, int ciphertext_len, unsigned char *aad,
 	int aad_len, unsigned char *tag, const unsigned char *key, const unsigned char *iv, 
-	unsigned char *plaintext, void *context)
-{
-	EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX*)context;
+	unsigned char *plaintext, EVP_CIPHER_CTX* ctx)
+{	
 
 	if (!ctx)
 		return -1;
@@ -259,42 +252,6 @@ int decrypt_siv(const unsigned char *ciphertext, int ciphertext_len, unsigned ch
 	return ciphertext_len;
 }
 
-bool sha256(const string& str, BYTE *sum)
-{
-	EVP_MD_CTX *mdctx = NULL;
-	bool ret = true;
-
-	try {
-
-		if (EVP_MD_size(EVP_sha256()) != 32)
-			handleErrors();
-
-		if ((mdctx = EVP_MD_CTX_create()) == NULL)
-			handleErrors();
-
-		if (1 != EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL))
-			handleErrors();
-
-		if (1 != EVP_DigestUpdate(mdctx, &str[0], str.size()))
-			handleErrors();
-
-		unsigned int len;
-		if (1 != EVP_DigestFinal_ex(mdctx, sum, &len))
-			handleErrors();
-
-		if (len != 32)
-			handleErrors();
-
-	} catch (...) {
-		ret = false;
-	}
-
-	if (mdctx)
-		EVP_MD_CTX_destroy(mdctx);
-
-	return ret;
-
-}
 
 bool sha256(const BYTE *data, int datalen, BYTE *sum)
 {
@@ -331,6 +288,11 @@ bool sha256(const BYTE *data, int datalen, BYTE *sum)
 
 	return ret;
 
+}
+
+bool sha256(const string& str, BYTE* sum)
+{
+	return sha256(reinterpret_cast<const BYTE*>(str.c_str()), static_cast<int>(str.length()), sum);
 }
 
 bool sha512(const BYTE *data, int datalen, BYTE *sum)
@@ -374,14 +336,12 @@ bool encrypt_string_gcm(const wstring& str, const BYTE *key, string& base64_out)
 {
 	BYTE iv[BLOCK_IV_LEN];
 
-	bool rval = true;
-
-	BYTE *encrypted = NULL;
+	bool rval = true;	
 
 	if (!get_sys_random_bytes(iv, sizeof(iv)))
 		return false;
 
-	void *context = get_crypt_context(BLOCK_IV_LEN, AES_MODE_GCM);
+	auto context = get_crypt_context(BLOCK_IV_LEN, AES_MODE_GCM);
 
 	if (!context)
 		return false;
@@ -394,27 +354,21 @@ bool encrypt_string_gcm(const wstring& str, const BYTE *key, string& base64_out)
 		BYTE aad[8];
 		memset(aad, 0, sizeof(aad));
 
-		encrypted = new BYTE[utf8.size() + BLOCK_IV_LEN + BLOCK_TAG_LEN];
+		vector<BYTE> encrypted(utf8.size() + BLOCK_IV_LEN + BLOCK_TAG_LEN);
 
-		memcpy(encrypted, iv, sizeof(iv));
+		memcpy(&encrypted[0], iv, sizeof(iv));
 
-		int ctlen = encrypt((const BYTE*)&utf8[0], (int)utf8.size(), aad, (int)sizeof(aad), key, iv, encrypted + (int)sizeof(iv), encrypted + (int)sizeof(iv) + (int)utf8.size(), context);
+		int ctlen = encrypt((const BYTE*)&utf8[0], (int)utf8.size(), aad, (int)sizeof(aad), key, iv, &encrypted[0] + (int)sizeof(iv), &encrypted[0] + sizeof(iv) + utf8.size(), context.get());
 
 		if (ctlen != utf8.size())
 			throw(-1);
 
-		if (!base64_encode(encrypted, ctlen + sizeof(iv) + BLOCK_TAG_LEN, base64_out, false, true))
+		if (!base64_encode(&encrypted[0], ctlen + sizeof(iv) + BLOCK_TAG_LEN, base64_out, false, true))
 			throw(-1);
 
 	} catch (...) {
 		rval = false;
-	}
-
-	if (context)
-		free_crypt_context(context);
-
-	if (encrypted)
-		delete[] encrypted;
+	}	
 
 	return rval;
 }
@@ -423,7 +377,7 @@ bool decrypt_string_gcm(const string& base64_in, const BYTE *key, wstring& str)
 {
 	bool rval = true;
 
-	void *context = get_crypt_context(BLOCK_IV_LEN, AES_MODE_GCM);
+	auto context = get_crypt_context(BLOCK_IV_LEN, AES_MODE_GCM);
 
 	if (!context)
 		return false;
@@ -437,23 +391,20 @@ bool decrypt_string_gcm(const string& base64_in, const BYTE *key, wstring& str)
 		if (!base64_decode(&base64_in[0], v, false, true))
 			throw(-1);
 
-		char *plaintext = new char[v.size() - BLOCK_IV_LEN - BLOCK_TAG_LEN + 1];
-		int ptlen = decrypt((const BYTE*)(&v[0] + BLOCK_IV_LEN), (int)v.size() - BLOCK_IV_LEN - BLOCK_TAG_LEN, adata, sizeof(adata), &v[0] + v.size() - BLOCK_TAG_LEN, key, &v[0], (BYTE*)plaintext, context);
+		vector<char> plaintext(v.size() - BLOCK_IV_LEN - BLOCK_TAG_LEN + 1);
+		int ptlen = decrypt((const BYTE*)(&v[0] + BLOCK_IV_LEN), (int)v.size() - BLOCK_IV_LEN - BLOCK_TAG_LEN, adata, sizeof(adata), &v[0] + v.size() - BLOCK_TAG_LEN, key, &v[0], (BYTE*)&plaintext[0], context.get());
 
 		if (ptlen != v.size() - BLOCK_IV_LEN - BLOCK_TAG_LEN)
 			throw(-1);
 
 		plaintext[ptlen] = '\0';
 
-		if (!utf8_to_unicode(plaintext, str))
+		if (!utf8_to_unicode(&plaintext[0], str))
 			throw(-1);
 
 	} catch (...) {
 			rval = false;
-	}
-
-	if (context)
-		free_crypt_context(context);
+	}	
 
 	return rval;
 }

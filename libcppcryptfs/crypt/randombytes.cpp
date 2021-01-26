@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -32,43 +32,14 @@ THE SOFTWARE.
 #include "util/util.h"
 #include "randombytes.h"
 
-RandomBytes::RandomBytes()
+RandomBytes::RandomBytes() : m_bufpos(RANDOM_POOL_SIZE) 
 {
-
-	m_pRandBuf = new LockZeroBuffer<BYTE>(RANDOM_POOL_SIZE);
-
-	if (!m_pRandBuf->IsLocked()) {
-		delete m_pRandBuf;
-		m_pRandBuf = NULL;
-		::MessageBox(NULL, L"cannot lock random pool", L"cppcryptfs", MB_OK | MB_ICONERROR);
-		bad_alloc exception;
-		throw exception;
-	}
-
-	m_randbuf = m_pRandBuf->m_buf;
-
-	m_bufpos = RANDOM_POOL_SIZE;
-
-	InitializeCriticalSection(&m_crit);
+	m_randbuf = new BYTE[RANDOM_POOL_SIZE];
 }
 
 RandomBytes::~RandomBytes()
 {
-	// do not free m_randbuf.  It points to m_pRandBuf->m_buf
-	if (m_pRandBuf)
-		delete m_pRandBuf;
-
-	DeleteCriticalSection(&m_crit);
-}
-
-void RandomBytes::lock()
-{
-	EnterCriticalSection(&m_crit);
-}
-
-void RandomBytes::unlock()
-{
-	LeaveCriticalSection(&m_crit);
+	delete[] m_randbuf;
 }
 
 bool RandomBytes::GetRandomBytes(unsigned char *buf, DWORD len)
@@ -93,7 +64,7 @@ bool RandomBytes::GetRandomBytes(unsigned char *buf, DWORD len)
 		}
 		if (get_sys_random_bytes(m_randbuf, RANDOM_POOL_SIZE)) {
 			m_bufpos = 0;
-			memcpy(buf + bytes_copied, m_randbuf + m_bufpos, len - bytes_copied);
+			memcpy(buf + bytes_copied, m_randbuf, len - bytes_copied);
 			m_bufpos += len - bytes_copied;
 		} else {
 			bret = false;

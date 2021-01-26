@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -29,6 +29,7 @@ THE SOFTWARE.
 #pragma once
 
 #include <windows.h>
+#include <mutex>
 
 #include "util/LockZeroBuffer.h"
 
@@ -36,24 +37,15 @@ THE SOFTWARE.
 
 class RandomBytes {
 private:
-
-	LockZeroBuffer<BYTE> *m_pRandBuf;
-
-	unsigned char *m_randbuf; // do not free this. it points to m_pRandBuf->m_buf;
-
+	mutex m_mutex;
+	BYTE* m_randbuf;
 	DWORD m_bufpos;
 
-	CRITICAL_SECTION m_crit;
-
-
-	void lock();
-	void unlock();
-
+	void lock() { m_mutex.lock(); }
+	void unlock() { m_mutex.unlock(); }
 public:
 	bool GetRandomBytes(unsigned char *buf, DWORD len);
-
 	RandomBytes();
-
 	// disallow copying
 	RandomBytes(RandomBytes const&) = delete;
 	void operator=(RandomBytes const&) = delete;

@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -30,6 +30,7 @@ THE SOFTWARE.
 
 #include <windows.h>
 
+#include <string>
 #include <vector>
 
 using namespace std;
@@ -67,10 +68,10 @@ bool
 adjust_file_offset_up_truncate_zero(LARGE_INTEGER& l);
 
 bool
-is_empty_directory(LPCWSTR path, BOOL bMustReallyBeEmpty = FALSE);
+is_empty_directory(LPCWSTR path, BOOL bMustReallyBeEmpty = FALSE, CryptContext *con = nullptr);
 
 bool
-can_delete_directory(LPCWSTR path, BOOL bMustReallyBeEmpty = FALSE);
+can_delete_directory(LPCWSTR path, BOOL bMustReallyBeEmpty = FALSE, CryptContext *con = nullptr);
 
 bool 
 can_delete_file(LPCWSTR path);

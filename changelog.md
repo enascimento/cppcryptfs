@@ -2,6 +2,94 @@
 
 Changelog
 ------------
+
+VSOMETHING SOMEDATE
+fix tab order
+add larger iobuffer sizes
+increase max number of threads
+make better use of stack buffers
+
+v1.4.3.5, Dec 6 2020
+* Use fast mounting only if mount point is a drive letter.  
+  It doesn't make sense to poll on an existing dir, and 
+  Dokany signals successful mounting fast if the mount point
+  is a dir.
+
+v1.4.3.4, Nov 28 2020
+* Add "enable fast mounting" setting (enabled by default).
+* Make cppcryptfs and cppcryptfsctl wait forever if the named pipe
+  is busy when trying to connect to a running instance of cppcryptfs
+  instead of timing out after 2 seconds.
+
+v1.4.3.3, Nov 7 2020
+* Add change password, print master key, and recover capabilities 
+  to cppcryptfsctl.
+
+v1.4.3.2, Oct 10 2020
+* Fix crash in MoveFile when destination directory has corrupt or missing
+  diriv file.
+
+v1.4.3.1, Aug 29 2020
+* Add capability for creating (initializing) filesystems using cppcryptfsctl.
+  (please review command line options because some have changed)
+  
+v1.4.3.0, July 12 2020
+* Add encrypt keys in memory and cache keys in memory settings.
+
+v1.4.2.3, June 14 2020
+* Fix small memory leak when files are renamed.  Renamed files also 
+  weren't being protected from the race condition mentioned in 1.4.2.0.
+
+v1.4.2.2, June 6 2020
+* Fix for writing to files that are opened with only append access
+  but not also (random) write access.
+* Build with Dokany 1.4.0.1000.
+
+v1.4.2.1, May 27 2020
+* Fail decryption of file names that contain invalid characters in the plain 
+  text.
+* Use the /guard:cf compilation flag for release builds.  
+* Use the /HIGHENTROPYVA linker option for 64-bit builds
+
+v1.4.2.0, Apr 26 2020
+* Fix race condition revealed by qBittorent
+
+v1.4.1.4, Feb 6 2020
+* Fix empty dialog boxes
+
+v1.4.1.3, Jan 25 2020
+* Add --csv and -D (list dirs first) options for listing encrypted
+  and plaintext file names from the command line.
+
+v1.4.1.2, Jan 18 2020
+* Make sure path is directory before opening with ShellExecute.
+
+v1.4.1.1, Jan 18 2020
+* Add setting to automatically open files system upon mounting.
+
+v1.4.1.0, Jan 11 2020
+* use name pipe for passing command line to cppcryptfs and results
+  back to caller.  
+* Add cppcryptfsctl.
+
+v1.4.0.29, Dec 26 2019
+* Compile with Microsoft Visual Studio 2019 (instead of 2017)
+  Build with Dokany 1.3.1.1000
+
+v1.4.0.28, Oct 26 2019
+* Return (NTSTATUS version of) ERROR_INVALID_NAME instead of
+  (NTSTATUS version of) ERROR_FILE_NOT_FOUND when asked
+  to open files with wildcard chars (* or ?) in them to fix
+  globbing issue with Windows CMD.exe.
+
+v1.4.0.27, Aug 11 2019
+* Build with Dokany 1.3.0.1000
+* Add option to disable named streams when creating filesystem.
+
+v1.4.0.26, Jul 7 2019
+* Add setting to enable auto-delete of desktop.ini files (issue #62)
+* Show Dokany version on about tab
+
 v1.4.0.25, Mar 17 2019
 * Fix issues with TeraCopy and launching some programs from container
 * Add double-click on mounted volume opens explorer feature
@@ -86,5 +174,5 @@ v1.4.0.4 Oct 13, 2017
 v1.4.0.3 Oct 2, 2017
 * saved passwords
 
-This changelong was unfortunately was started belatedly...
+This changelog was unfortunately started belatedly...
 

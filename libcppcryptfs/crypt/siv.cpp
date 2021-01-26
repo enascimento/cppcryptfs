@@ -2,7 +2,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -44,13 +44,18 @@ SivContext::~SivContext()
 		delete m_pKeys;
 }
 
-bool SivContext::SetKey(const unsigned char *key, int keylen, bool hkdf)
+bool SivContext::SetKey(const unsigned char *key, int keylen, bool hkdf, CryptConfig *pConfig)
 {
 	if (keylen != 32)
 		return false;
 
+	if (!pConfig)
+		throw std::exception("SivContext::SetKey where is my config?");
+
 	if (!m_pKeys)
 		m_pKeys = new LockZeroBuffer<AES_KEY>(4, true);
+
+	pConfig->m_keybuf_manager.RegisterBuf(m_pKeys);
 
 	LockZeroBuffer<BYTE> key64(64, true);
 

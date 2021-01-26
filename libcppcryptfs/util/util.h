@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -29,15 +29,15 @@ THE SOFTWARE.
 #pragma once
 
 #include <windows.h>
+#include <string>
 #include <vector>
 #include <utility>
-#include <memory>
 
 using namespace std;
 
 class CryptContext;
 
-// DbgPrint() function is really in cryptdokan.cpp
+void SetDbgVars(BOOL DebugMode, BOOL UseStdErr, BOOL UseLogFile, FILE* logfile);
 void DbgPrint(LPCWSTR format, ...);
 
 const char *
@@ -82,19 +82,13 @@ get_random_bytes(CryptContext *con, unsigned char *buf, DWORD len);
 
 bool get_sys_random_bytes(unsigned char *buf, DWORD len);
 
-DWORD getppid();
-
 bool have_args();
 
 bool OpenConsole(DWORD pid = 0);
 
 void CloseConsole();
 
-void ConsoleErrMes(LPCWSTR err, DWORD pid = 0);
-
-bool
-GetProductVersionInfo(wstring& strProductName, wstring& strProductVersion,
-	wstring& strLegalCopyright, HMODULE hMod = NULL);
+void ConsoleErrMesPipe(LPCWSTR err, HANDLE hPipe);
 
 bool touppercase(LPCWSTR in, wstring& out);
 
@@ -102,110 +96,60 @@ int compare_names(CryptContext *con, LPCWSTR name1, LPCWSTR name2);
 
 bool is_all_zeros(const BYTE *buf, size_t len);
 
-BOOL GetPathHash(LPCWSTR path, wstring& hashstr);
+template <typename T>
+bool is_power_of_two(const T& num)
+{
+	return ((num != 1) && (num & (num - 1))) == 0;
+}
 
-wstring GetWindowsErrorString(DWORD dwLastErr);
+BOOL GetPathHash(LPCWSTR path, wstring& hashstr);
 
 void SetOverlapped(LPOVERLAPPED pOv, LONGLONG offset);
 
 void IncOverlapped(LPOVERLAPPED pOv, DWORD increment);
 
+const wchar_t* get_command_line_usage();
 
-namespace cppcryptfs
-{
-	/*
-	 * This method takes a function that returns a resource,a function that deletes
-	 * the resource and arguments that are to be passed to the function that returns a
-	 * resource.
-	 *
-	 * example usecase of a function:
-	 *
-	 * auto woof = utility2::unique_rsc( ::fopen,::fclose,"/woof/foo/bar","r" ) ;
-	 */
-	template<typename Function, typename Deleter, typename ... Arguments>
-	auto unique_rsc(Function&& function, Deleter&& deleter, Arguments&& ... args)
+// this class is for cases where we need a temp buffer that
+// can usually be allocated on the stack, but we might
+// have cases where the buffer is too big for stack allocation
+// in which case we want to use a dynamically allocated buffer
+// from a vector.  So we do seomthing like
+//
+// size_t len = get_needed_len();
+// TempBuffer<char, 1024> tmp(len);
+// char *p = tmp.get();
+// or it can be constructed before size is known and then
+// get with a length will resize it.
+// e.g.
+// TempBuffer<char, 1024> tmp;
+// size_t len = get_needed_len();
+// char *p = get(len);
+
+template <typename T, size_t L>
+class TempBuffer {
+private:
+	vector<T> m_vec;
+	size_t m_len;
+	T m_buf[L];	
+public:
+	TempBuffer(size_t len = 0) : m_len(len) {}
+	T* get(size_t len = 0)
 	{
-		using A = std::remove_pointer_t<std::result_of_t<Function(Arguments&&...)>>;
-		using B = std::decay_t<Deleter>;
+		if (len)
+			m_len = len;
 
-		return std::unique_ptr<A,B>(function(std::forward<Arguments>(args)...),
-					    std::forward<Deleter>(deleter));
+		if (m_len <= L) {
+			return m_buf;
+		} else {
+			if (m_vec.size() < m_len) {
+				try {
+					m_vec.resize(m_len);
+				} catch (const std::bad_alloc&) {
+					return nullptr;
+				}
+			} 
+			return &m_vec[0];
+		}
 	}
-
-	/*
-	 * This function takes a type,a deleter for the type and optional arguments the
-	 * construction of the object of the given type need.
-	 *
-	 * example:
-	 * auto woof = unique_ptr<Foo>(foo_deleter, arg1, arg2, argN);
-	 * auto woof = unique_ptr<Foo>(foo_deleter);
-	 *
-	 * The deleter must be a function that takes a single argument of type "Foo*".
-	 *
-	 */
-	template<typename Type, typename Deleter, typename ...Arguments>
-	auto unique_ptr(Deleter&& deleter, Arguments&& ...args)
-	{
-		auto create_object = [](Arguments&& ...args ){
-
-			if (sizeof ...(args) == 0){
-				return new Type();
-			}else{
-				return new Type(std::forward<Arguments>(args)...);
-			}
-		};
-
-		return unique_rsc(std::move(create_object),
-				  std::forward<Deleter>(deleter),
-				  std::forward<Arguments>(args)...);
-	}
-
-	/*
-	 * This function takes a type,a deleter for the type and optional arguments the
-	 * construction of the object of the given type need.
-	 *
-	 * example:
-	 * Foo *xxx = new Foo(12,"bar");
-	 * auto woof = unique_ptr(xxx, foo_deleter);
-	 *
-	 * The deleter must be a function that takes a single argument of type "Foo*".
-	 *
-	 */
-	template<typename Type, typename Deleter>
-	auto unique_ptr(Type type, Deleter&& deleter)
-	{
-		return unique_rsc([]( auto arg ){ return arg ; },
-				  std::forward<Deleter>(deleter),
-				  type);
-	}
-
-	/*
-	 * This function takes a function that returns a handle through its first argument and could
-	 * take additional arguments.
-	 *
-	 * The function must return 0 on success.
-	 *
-	 * example:
-	 *
-	 * int function(Foo **foo, const char *, int) // function prototype
-	 *
-	 * auto woof = unique_ptr<Foo>(function, foo_deleter, arg1, arg2, argN);
-	 */
-	template<typename Type, typename Function, typename Deleter, typename ...Arguments>
-	auto unique_ptr(Function&& function, Deleter&& deleter, Arguments&& ...args)
-	{
-		auto create_object = [](Function&& function, Arguments&& ...args){
-			Type *fl;
-			if (function(&fl,std::forward<Arguments>(args)...)){
-				return static_cast<Type*>(nullptr);
-			}else{
-				return fl;
-			}
-		};
-
-		return unique_rsc(std::move(create_object),
-				  std::forward<Deleter>(deleter),
-				  std::forward<Function>(function),
-				  std::forward<Arguments>(args)...);
-	}
-}
+};

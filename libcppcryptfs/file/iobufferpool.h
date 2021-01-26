@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -31,6 +31,10 @@ THE SOFTWARE.
 
 #include <windows.h>
 #include <list>
+#include <stdexcept>
+#include <vector>
+#include <mutex>
+#include <crypt/cryptdefs.h>
 
 using namespace std;
 
@@ -38,58 +42,44 @@ class IoBuffer {
 public:
 
 	unsigned char *m_pBuf;
-	size_t m_bufferSize;
+	unsigned char* m_pIvBuf;
 	bool m_bIsFromPool;
+	vector<unsigned char> m_storage;
 
 	// disallow copying
 	IoBuffer(IoBuffer const&) = delete;
 	void operator=(IoBuffer const&) = delete;
 
-	IoBuffer(bool fromPool, size_t bufferSize);
-	virtual ~IoBuffer();
+	IoBuffer(bool fromPool, size_t bufferSize, size_t ivbuffer_size);
+
+	void reallocate(size_t bufferSize, size_t ivbuffer_size);
+	~IoBuffer() = default;
 
 };
 
 class IoBufferPool {
 private:
-	CRITICAL_SECTION m_crit;
-	const int m_max_buffers = 10;
-	int m_num_buffers;
-	size_t m_buffer_size;
+	mutex m_mutex;		
+	static const size_t m_max_size = 70*1024*1024;	
+	size_t m_current_size;
 	list<IoBuffer*> m_buffers;
-	void lock();
-	void unlock();
 
-	void init(size_t buffer_size);
+	IoBufferPool() : m_current_size(0) {};
 
-	IoBufferPool() { m_buffer_size = 0; }
+	static IoBufferPool instance;
 
 public:
 
-	static IoBufferPool* getInstance(size_t buffer_size = 0)
-	{
-		static IoBufferPool  instance; 
+	// the size below is to accomodate the maximum i/o buffer size + enough IVs to write up to 64MB
+	static const size_t m_max_pool_buffer_size = ((MAX_IO_BUFFER_KB * 1024) / PLAIN_BS) * CIPHER_BS + ((64 * 1024 * 1024) / PLAIN_BS) * BLOCK_IV_LEN;
 
-		// We don't need to care about thread safety with this singleton
-		// because getInstance() is called with an argument only during a mount operation which 
-		// is always initiated from the main thread. If instance.m_buffer_size is not
-		// 0 then init() won't be called again.
-		// The methods that involve IoBuffers are all thread-safe.
-		if (buffer_size == 0 && instance.m_buffer_size == 0) {
-			throw std::runtime_error("error: attempting to use uninitialized IoBufferPool");
-		}
-
-		if (buffer_size != 0 && instance.m_buffer_size == 0) {
-			instance.init(buffer_size);
-		}
-		return &instance;
-	}
+	static IoBufferPool& getInstance();
 
 	// disallow copying
 	IoBufferPool(IoBufferPool const&) = delete;
 	void operator=(IoBufferPool const&) = delete;
 
-	virtual ~IoBufferPool();
-	IoBuffer *GetIoBuffer(size_t buffer_size);
+	~IoBufferPool();
+	IoBuffer *GetIoBuffer(size_t buffer_size, size_t ivbufer_size);
 	void ReleaseIoBuffer(IoBuffer *pBuf);
 };

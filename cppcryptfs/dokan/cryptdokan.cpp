@@ -2,7 +2,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -101,38 +101,21 @@ THE SOFTWARE.
 #include "FileNameEnc.h"
 #include "MountPointManager.h"
 
+#include "../libcommonutil/commonutil.h"
 
 
-BOOL g_UseStdErr;
-BOOL g_DebugMode;
-BOOL g_HasSeSecurityPrivilege;
 
-void DbgPrint(LPCWSTR format, ...) {
-  if (g_DebugMode) {
-    const WCHAR *outputString;
-    WCHAR *buffer = NULL;
-    size_t length;
-    va_list argp;
+static BOOL g_HasSeSecurityPrivilege;
 
-    va_start(argp, format);
-    length = _vscwprintf(format, argp) + 1;
-    buffer = (WCHAR *)_malloca(length * sizeof(WCHAR));
-    if (buffer) {
-      vswprintf_s(buffer, length, format, argp);
-      outputString = buffer;
-    } else {
-      outputString = format;
-    }
-    if (g_UseStdErr)
-      fputws(outputString, stderr);
-    else
-      OutputDebugStringW(outputString);
-    if (buffer)
-      _freea(buffer);
-    va_end(argp);
-  }
-}
+#ifdef _DEBUG
+static BOOL g_DebugMode = TRUE;
+#else
+static BOOL g_DebugMode = FALSE;
+#endif
+static BOOL g_UseStdErr = FALSE;
+static BOOL g_UseLogFile = FALSE;
 
+static FILE* g_DebugLogFile = nullptr;
 
 int WINAPI
 CryptCaseStreamsCallback(PWIN32_FIND_STREAM_DATA pfdata, LPCWSTR encrypted_name,
@@ -153,6 +136,9 @@ CryptCaseStreamsCallback(PWIN32_FIND_STREAM_DATA pfdata, LPCWSTR encrypted_name,
 
 static void PrintUserName(PDOKAN_FILE_INFO DokanFileInfo) {
 
+// this function is expensive and doesn't seem to provide
+// any useful information in the log
+#if 0
   if (!g_DebugMode)
     return;
 
@@ -189,6 +175,7 @@ static void PrintUserName(PDOKAN_FILE_INFO DokanFileInfo) {
   }
 
   DbgPrint(L"  AccountName: %s, DomainName: %s\n", accountName, domainName);
+#endif // #if 0
 }
 
 NTSTATUS ToNtStatus(DWORD dwError) {
@@ -347,6 +334,15 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
     return ToNtStatus(ERROR_FILE_NOT_FOUND);
   }
 
+  // Windows sometimes gives us wildcarded filenames and expects us 
+  // to return ERROR_INVALID_NAME 
+  if (wcschr(FileName, L'*') || wcschr(FileName, L'?')) {
+    error = ERROR_INVALID_NAME;
+    SetLastError(error);
+    DbgPrint(L"\terror code = %d\n\n", error);
+    return ToNtStatus(error);
+  }
+
   // When filePath is a directory, needs to change the flag so that the file can
   // be opened.
   fileAttr = is_virtual ? FILE_ATTRIBUTE_NORMAL : GetFileAttributes(filePath);
@@ -357,9 +353,16 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
   // The two blocks below are there because we generally can't write to file
   // unless we can also read from it.
   if (!(bHasDirAttr || (CreateOptions & FILE_DIRECTORY_FILE)) &&
-      ((DesiredAccess & GENERIC_WRITE) || (DesiredAccess & FILE_WRITE_DATA))) {
+      ((DesiredAccess & GENERIC_WRITE) || (DesiredAccess & FILE_WRITE_DATA) || (DesiredAccess & FILE_APPEND_DATA))) {
     DbgPrint(L"\tadded GENERIC_READ to genericDesiredAccess\n");
     genericDesiredAccess |= GENERIC_READ;
+    if (DesiredAccess & FILE_APPEND_DATA) {
+        // We need to be able to overwrite whole blocks. 
+        // We can't just append data to the end of the file.
+        // So we need write accesses too.
+        DbgPrint(L"\tadded FILE_WRITE_DATA to genericDesiredAccess\n");
+        genericDesiredAccess |= FILE_WRITE_DATA;
+    }
   }
 
   if (!(bHasDirAttr || (CreateOptions & FILE_DIRECTORY_FILE)) &&
@@ -531,8 +534,12 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
             RemoveDirectory(filePath);
           }
         }
+        
         DokanFileInfo->Context =
             (ULONG64)handle; // save the file handle in Context
+
+        // this is a directory so no need to store it in the openfiles map
+
         // Open succeed but we need to inform the driver
         // that the dir open and not created by returning STATUS_OBJECT_NAME_COLLISION
         if (creationDisposition == OPEN_ALWAYS &&
@@ -625,6 +632,10 @@ CryptCreateFile(LPCWSTR FileName, PDOKAN_IO_SECURITY_CONTEXT SecurityContext,
       DokanFileInfo->Context =
           (ULONG64)handle; // save the file handle in Context
 
+      if (handle && handle != INVALID_HANDLE_VALUE) {
+          GetContext()->m_openfiles.OpenFile(FileName, handle);
+      }
+
       if (creationDisposition == OPEN_ALWAYS ||
           creationDisposition == CREATE_ALWAYS) {
         error = GetLastError();
@@ -658,8 +669,11 @@ static void DOKAN_CALLBACK CryptCloseFile(LPCWSTR FileName,
   if (DokanFileInfo->Context) {
     DbgPrint(L"CloseFile: %s, %x\n", FileName, (DWORD)DokanFileInfo->Context);
     DbgPrint(L"\terror : not cleanuped file\n\n");
-    if ((HANDLE)DokanFileInfo->Context != INVALID_HANDLE_VALUE)
-      CloseHandle((HANDLE)DokanFileInfo->Context);
+    if ((HANDLE)DokanFileInfo->Context != INVALID_HANDLE_VALUE) {
+        CloseHandle((HANDLE)DokanFileInfo->Context);
+        if (!DokanFileInfo->IsDirectory)
+            GetContext()->m_openfiles.CloseFile(FileName, (HANDLE)DokanFileInfo->Context);
+    }
     DokanFileInfo->Context = 0;
   } else {
     DbgPrint(L"Close (no handle): %s\n\n", FileName);
@@ -672,8 +686,11 @@ static void DOKAN_CALLBACK CryptCleanup(LPCWSTR FileName,
 
   if (DokanFileInfo->Context) {
     DbgPrint(L"Cleanup: %s, %x\n\n", FileName, (DWORD)DokanFileInfo->Context);
-    if ((HANDLE)DokanFileInfo->Context != INVALID_HANDLE_VALUE)
-      CloseHandle((HANDLE)(DokanFileInfo->Context));
+    if ((HANDLE)DokanFileInfo->Context != INVALID_HANDLE_VALUE) {
+        CloseHandle((HANDLE)(DokanFileInfo->Context));
+        if (!DokanFileInfo->IsDirectory)
+            GetContext()->m_openfiles.CloseFile(FileName, (HANDLE)DokanFileInfo->Context);
+    }
     DokanFileInfo->Context = 0;
   } else {
     DbgPrint(L"Cleanup: %s\n\tinvalid handle\n\n", FileName);
@@ -735,6 +752,8 @@ static NTSTATUS DOKAN_CALLBACK CryptReadFile(LPCWSTR FileName, LPVOID Buffer,
       DbgPrint(L"\tCreateFile error : %d\n\n", error);
       return ToNtStatus(error);
     }
+    
+    GetContext()->m_openfiles.OpenFile(FileName, handle);
     opened = TRUE;
   }
 
@@ -758,7 +777,7 @@ static NTSTATUS DOKAN_CALLBACK CryptReadFile(LPCWSTR FileName, LPVOID Buffer,
                error, BufferLength, *ReadLength);
       ret_status = ToNtStatus(error);
     }
-  } else if (file->Associate(GetContext(), handle, FileName)) {
+  } else if (file->Associate(GetContext(), handle, FileName, false)) {
 
     if (!file->Read((unsigned char *)Buffer, BufferLength, ReadLength,
                     Offset)) {
@@ -776,8 +795,10 @@ static NTSTATUS DOKAN_CALLBACK CryptReadFile(LPCWSTR FileName, LPVOID Buffer,
 
   delete file;
 
-  if (opened)
+  if (opened) {
     CloseHandle(handle);
+    GetContext()->m_openfiles.CloseFile(FileName, handle);
+  }
 
   return ret_status;
 }
@@ -814,12 +835,13 @@ static NTSTATUS DOKAN_CALLBACK CryptWriteFile(LPCWSTR FileName, LPCVOID Buffer,
       DbgPrint(L"\tCreateFile error : %d\n\n", error);
       return ToNtStatus(error);
     }
-
+    GetContext()->m_openfiles.OpenFile(FileName, handle);
     opened = TRUE;
   }
 
   CryptFile *file = CryptFile::NewInstance(GetContext());
-  if (file->Associate(GetContext(), handle, FileName)) {
+
+  if (file->Associate(GetContext(), handle, FileName, true)) {
     if (!file->Write((const unsigned char *)Buffer, NumberOfBytesToWrite,
                      NumberOfBytesWritten, Offset,
                      DokanFileInfo->WriteToEndOfFile,
@@ -838,8 +860,10 @@ static NTSTATUS DOKAN_CALLBACK CryptWriteFile(LPCWSTR FileName, LPCVOID Buffer,
   delete file;
 
   // close the file when it is reopened
-  if (opened)
+  if (opened) {
     CloseHandle(handle);
+    GetContext()->m_openfiles.CloseFile(FileName, handle);
+  }
 
   return ret_status;
 }
@@ -884,6 +908,7 @@ static NTSTATUS DOKAN_CALLBACK CryptGetFileInformation(
       DbgPrint(L"\tCreateFile error : %d\n\n", error);
       return DokanNtStatusFromWin32(error);
     }
+    GetContext()->m_openfiles.OpenFile(FileName, handle);
     opened = TRUE;
   }
 
@@ -903,8 +928,10 @@ static NTSTATUS DOKAN_CALLBACK CryptGetFileInformation(
     status = STATUS_SUCCESS;
   }
 
-  if (opened)
+  if (opened) {
     CloseHandle(handle);
+    GetContext()->m_openfiles.CloseFile(FileName, handle);
+  }
 
   return status;
 }
@@ -926,6 +953,8 @@ CryptFindFiles(LPCWSTR FileName,
 
   DWORD error;
   long long count = 0;
+  
+  DWORD result = 0;
 
   DbgPrint(L"FindFiles :%s\n", FileName);
 
@@ -933,11 +962,14 @@ CryptFindFiles(LPCWSTR FileName,
                  crypt_fill_find_data, (void *)FillFindData,
                  (void *)DokanFileInfo) != 0) {
     error = GetLastError();
-    DbgPrint(L"\tFindNextFile error. Error is %u\n\n", error);
-    return ToNtStatus(error);
+    DbgPrint(L"\tFindNextFile error. Error is %u\n", error);
+    
+    result = error ? error : ERROR_ACCESS_DENIED;
   }
 
-  return STATUS_SUCCESS;
+  DbgPrint(L"\tCryptFindFiles returning %lu\n\n", result);
+
+  return result == 0 ?  STATUS_SUCCESS : ToNtStatus(result);
 }
 
 static NTSTATUS DOKAN_CALLBACK CryptDeleteFile(LPCWSTR FileName,
@@ -987,7 +1019,7 @@ CryptDeleteDirectory(LPCWSTR FileName, PDOKAN_FILE_INFO DokanFileInfo) {
     return STATUS_SUCCESS;
   }
 
-  if (can_delete_directory(filePath)) {
+  if (can_delete_directory(filePath, FALSE, GetContext())) {
     return STATUS_SUCCESS;
   } else {
     DWORD error = GetLastError();
@@ -1024,6 +1056,17 @@ static NTSTATUS CryptMoveFileInternal(LPCWSTR FileName, // existing file name
   if (!handle || handle == INVALID_HANDLE_VALUE) {
     DbgPrint(L"\tinvalid handle\n\n");
     return STATUS_INVALID_HANDLE;
+  }
+
+  auto new_path = static_cast<const WCHAR*>(newFilePath);
+
+  if (new_path == nullptr) {
+      // this can happen e.g. if we can't read a diriv in the "to" path
+      auto lasterr = GetLastError();
+      DbgPrint(L"\tnewFilePath is null, last error was %u\n", lasterr);
+      // we return accessed denied because whatever error really happened might 
+      // not make any sense to the caller.
+      return STATUS_ACCESS_DENIED;
   }
 
   newFilePathLen = wcslen(newFilePath);
@@ -1101,14 +1144,24 @@ static NTSTATUS CryptMoveFileInternal(LPCWSTR FileName, // existing file name
       if (!GetContext()->m_case_cache.store(newFilePath.CorrectCasePath())) {
         DbgPrint(L"move unable to store new filename %s in case cache\n",
                  newFilePath.CorrectCasePath());
+        assert(false);
       }
       if (DokanFileInfo->IsDirectory) {
         if (!GetContext()->m_case_cache.rename(filePath.CorrectCasePath(),
                                                newFilePath.CorrectCasePath())) {
           DbgPrint(L"move unable to rename directory %s -> %s in case cache\n",
                    filePath.CorrectCasePath(), newFilePath.CorrectCasePath());
+          assert(false);
         }
       }
+    }
+
+    // rename in openfiles if it's a file
+    // openfiles is case insensitive so we don't want to do it
+    // again if we're just repairing the name (the case)
+    if (!DokanFileInfo->IsDirectory && !repairName) {
+        bool rename_result = GetContext()->m_openfiles.Rename(FileName, NewFileName);
+        assert(rename_result);       
     }
 
     return STATUS_SUCCESS;
@@ -1219,11 +1272,12 @@ CryptMoveFile(LPCWSTR FileName, // existing file name
             CryptFile *src = CryptFile::NewInstance(GetContext());
             CryptFile *dst = CryptFile::NewInstance(GetContext());
 
+            // the below comment is out-dated
             // we don't need to pass pt_path to associate in forward mode so it can be null
             // we never get here in reverse mode because it is read-only
 
-            if (src->Associate(GetContext(), hStreamSrc) &&
-                dst->Associate(GetContext(), hStreamDest)) {
+            if (src->Associate(GetContext(), hStreamSrc, FileName, false) &&
+                dst->Associate(GetContext(), hStreamDest, NewFileName, true)) {
 
               const DWORD bufsize = 64 * 1024;
 
@@ -1283,7 +1337,7 @@ static NTSTATUS DOKAN_CALLBACK CryptLockFile(LPCWSTR FileName,
 
   CryptFile *file = CryptFile::NewInstance(GetContext());
 
-  if (file->Associate(GetContext(), handle, FileName)) {
+  if (file->Associate(GetContext(), handle, FileName, false)) {
 
     if (!file->LockFile(ByteOffset, Length)) {
       DWORD error = GetLastError();
@@ -1317,7 +1371,7 @@ static NTSTATUS DOKAN_CALLBACK CryptSetEndOfFile(
 
   CryptFile *file = CryptFile::NewInstance(GetContext());
 
-  if (file->Associate(GetContext(), handle, FileName)) {
+  if (file->Associate(GetContext(), handle, FileName, true)) {
     if (!file->SetEndOfFile(ByteOffset)) {
       DWORD error = GetLastError();
       DbgPrint(L"\tSetEndOfFile error code = %d\n\n", error);
@@ -1361,7 +1415,7 @@ static NTSTATUS DOKAN_CALLBACK CryptSetAllocationSize(
     if (AllocSize < fileSize.QuadPart) {
       fileSize.QuadPart = AllocSize;
       CryptFile *file = CryptFile::NewInstance(GetContext());
-      if (!file->Associate(GetContext(), handle, FileName)) {
+      if (!file->Associate(GetContext(), handle, FileName, true)) {
         delete file;
         throw(-1);
       }
@@ -1452,7 +1506,7 @@ static NTSTATUS DOKAN_CALLBACK CryptUnlockFile(LPCWSTR FileName,
 
   CryptFile *file = CryptFile::NewInstance(GetContext());
 
-  if (file->Associate(GetContext(), handle, FileName)) {
+  if (file->Associate(GetContext(), handle, FileName, false)) {
 
     if (!file->UnlockFile(ByteOffset, Length)) {
       DWORD error = GetLastError();
@@ -1652,6 +1706,8 @@ static NTSTATUS DOKAN_CALLBACK CryptGetVolumeInformation(
                     | FILE_NAMED_STREAMS
 #endif
                     );
+
+  defFlags &= ~config->m_fs_feature_disable_mask;
 
   if (FileSystemFlags)
     *FileSystemFlags = defFlags & (bGotVI ? fs_flags : 0xffffffff);
@@ -1878,7 +1934,9 @@ int mount_crypt_fs(const WCHAR* mountpoint, const WCHAR *path,
 	  return -1;
   }
 
-  if (is_mountpoint_a_dir(mountpoint) && !is_suitable_mountpoint(mountpoint)) {
+  bool mount_point_is_a_dir = is_mountpoint_a_dir(mountpoint);
+
+  if (mount_point_is_a_dir && !is_suitable_mountpoint(mountpoint)) {
 	  if (!PathFileExists(mountpoint)) {
 		  mes = L"the mount point directory does not exist";
 	  } else {
@@ -1911,6 +1969,12 @@ int mount_crypt_fs(const WCHAR* mountpoint, const WCHAR *path,
     if (!tdata) {
       mes = L"Failed to allocate tdata\n";
       throw(-1);
+    }
+
+    if (opts.encryptkeysinmemory) {
+        tdata->con.m_encryptKeysInMemory = true;
+        tdata->con.m_cacheKeysInMemory = opts.cachekeysinmemory;
+        tdata->con.GetConfig()->m_keybuf_manager.Activate();
     }
 
     PDOKAN_OPERATIONS dokanOperations = &tdata->operations;
@@ -1960,18 +2024,14 @@ int mount_crypt_fs(const WCHAR* mountpoint, const WCHAR *path,
 
     CryptContext *con = &tdata->con;
 
-    con->m_bufferblocks = min(256, max(1, opts.numbufferblocks));
-
-	// initialize IoBufferPool singleton (will init if not already inited)
-	// block size is tuned for first mounted filesystem
-	// if subsquent mounts require a larger block due to setting being changed
-	// then those mounts buffers will come from the heap instead of the pool
-    IoBufferPool::getInstance(con->m_bufferblocks * CIPHER_BS); 
+    con->m_bufferblocks = min(4096, max(1, opts.numbufferblocks));	 
 
     con->m_dir_iv_cache.SetTTL(opts.cachettl);
     con->m_case_cache.SetTTL(opts.cachettl);
 
     con->SetCaseSensitive(opts.caseinsensitive);
+
+	con->m_delete_spurrious_files = opts.deletespurriousfiles;
 
 	con->m_cache_ttl = opts.cachettl;
 
@@ -2045,7 +2105,7 @@ int mount_crypt_fs(const WCHAR* mountpoint, const WCHAR *path,
 
     if (config->m_AESSIV) {
       try {
-        con->m_siv.SetKey(config->GetMasterKey(), 32, config->m_HKDF);
+        con->m_siv.SetKey(config->GetMasterKey(), 32, config->m_HKDF, config);
       } catch (...) {
         mes = L"unable to intialize AESSIV context";
         throw(-1);
@@ -2098,11 +2158,16 @@ int mount_crypt_fs(const WCHAR* mountpoint, const WCHAR *path,
         }
       }
 
-	  if (have_security_name_privilege()) {
+      if (have_security_name_privilege()) {
 		  dokanOptions->Options |= DOKAN_OPTION_MOUNT_MANAGER;
 		  con->m_recycle_bin = true;
 	  }
     }
+
+	if (!con->FinalInitBeforeMounting(opts.cachekeysinmemory)) {
+      mes = L"context final init failed";
+      throw(-1);
+	}
 
     dokanOptions->GlobalContext = (ULONG64)con;
     dokanOptions->Options |= DOKAN_OPTION_ALT_STREAM;
@@ -2127,8 +2192,36 @@ int mount_crypt_fs(const WCHAR* mountpoint, const WCHAR *path,
     handles[0] = con->m_mountEvent;
     handles[1] = hThread;
 
-    DWORD wait_result = WaitForMultipleObjects(
-        sizeof(handles) / sizeof(handles[0]), handles, FALSE, MOUNT_TIMEOUT);
+
+    
+    auto tick0 = ::GetTickCount64();
+
+    decltype(tick0) elapsed = 0;
+
+    DWORD wait_result = WAIT_TIMEOUT;
+
+    // polling makes sense only on drive letters because a mount point dir will
+    // already exist.  Also, Dokany calls back fast if the mount point is a dir
+
+    bool do_fast_mounting = opts.fastmounting && !mount_point_is_a_dir;
+
+    while (wait_result == WAIT_TIMEOUT && elapsed < MOUNT_TIMEOUT) {
+       
+        wait_result = WaitForMultipleObjects(
+                sizeof(handles) / sizeof(handles[0]), handles, FALSE, do_fast_mounting ? FAST_MOUNTING_WAIT : MOUNT_TIMEOUT);
+
+        if (do_fast_mounting) {
+            // it currently takes about 5 seconds for Dokany to call back that the fs mounted
+            // if the mount point is a drive letter, but the fs actually mounts almost instantly.
+            // so we also poll on it existing and assume everything succeded if it does exist
+            if (wait_result == WAIT_TIMEOUT && ::PathFileExists(con->GetConfig()->m_mountpoint.c_str())) {
+                wait_result = WAIT_OBJECT_0;
+            }
+            elapsed = ::GetTickCount64() - tick0;
+        } else {
+            elapsed = MOUNT_TIMEOUT;          
+        }       
+    }    
 
     if (wait_result != WAIT_OBJECT_0) {
       if (wait_result == (WAIT_OBJECT_0 + 1)) {
@@ -2150,7 +2243,7 @@ int mount_crypt_fs(const WCHAR* mountpoint, const WCHAR *path,
 
   if (retval != 0) {
 	MountPointManager::getInstance().destroy(mountpoint);
-  }
+  } 
 
   return retval;
 }
@@ -2217,6 +2310,8 @@ BOOL write_volume_name_if_changed(WCHAR dl, wstring& mes) {
 	  return FALSE;
   }
 
+  KeyDecryptor kdc(&con->GetConfig()->m_keybuf_manager);
+
   WCHAR volbuf[256];
 
   if (!GetVolumeInformationW(&fs_root[0], volbuf,
@@ -2230,7 +2325,7 @@ BOOL write_volume_name_if_changed(WCHAR dl, wstring& mes) {
 
   if (con->GetConfig()->m_VolumeName != volbuf) {
     con->GetConfig()->m_VolumeName = volbuf;
-    bool res = con->GetConfig()->write_volume_name();
+    bool res = con->GetConfig()->write_updated_config_file();
 	if (!res) {
 		mes += L"unable to write new volume name to config file";
 		return FALSE;
@@ -2412,7 +2507,7 @@ BOOL list_files(const WCHAR *path, list<FindDataPair> &findDatas,
   return TRUE;
 }
 
-static bool get_dokany_version(wstring& ver, vector<int>& v)
+bool get_dokany_version(wstring& ver, vector<int>& v)
 {
 	// DokanVersion() is useless because it returns 100
 
@@ -2458,8 +2553,8 @@ static bool get_dokany_version(wstring& ver, vector<int>& v)
 bool check_dokany_version(wstring& mes)
 {
 	const int required_major = 1;
-	const int required_middle = 2;
-	const wstring required_ver = L"1.2.x.x";
+	const int required_middle = 4;
+	const wstring required_ver = L"1.4.x.x";
 	
 	mes = L"";
 
@@ -2512,4 +2607,72 @@ bool get_fs_info(const wchar_t *mountpoint, FsInfo& info)
 	tdata->con.GetFsInfo(info);
 
 	return true;
+}
+
+void crypt_at_exit()
+{
+    KeyCache::GetInstance()->StopClearThread();
+
+    if (g_DebugLogFile) {      
+        FILE* fl = g_DebugLogFile;
+        g_DebugLogFile = nullptr;
+        fclose(fl);       
+    }
+}
+
+
+static void InitLogging()
+{
+    const WCHAR* logdir = L"C:\\cppcryptfslogs";
+
+    if (!PathFileExists(logdir)) {
+        ::MessageBox(NULL, (wstring(L"Unable to init logging.  Please create ") + logdir).c_str(), L"cppcryptfs", MB_OK | MB_ICONEXCLAMATION);
+        return;
+    }
+
+    auto pad2 = [](int n) {
+
+        wchar_t buf[8];
+
+        *buf = L'\0';
+
+        swprintf_s(buf, L"%02d", n);
+
+        return wstring(buf);
+    };
+
+    SYSTEMTIME st;
+
+    memset(&st, 0, sizeof(st));
+
+    GetLocalTime(&st);
+
+    wstring year, month, day, hour, minute, second;
+
+    year = to_wstring(st.wYear);
+    month = pad2(st.wMonth);
+    day = pad2(st.wDay);
+
+    hour = pad2(st.wHour);
+    minute = pad2(st.wMinute);
+    second = pad2(st.wSecond);
+
+    wstring logname = wstring(logdir) + L"\\cppcryptfs-" + year + L"-" + month + L"-" + day + L"_" + hour + L"." + minute + L"." + second + L".log";
+
+    int result = _wfopen_s(&g_DebugLogFile, logname.c_str(), L"at+");
+
+    if (result == 0) {
+        ::MessageBox(NULL, (wstring(L"Logging to ") + logname).c_str(), L"cppcryptfs", MB_OK | MB_ICONINFORMATION);
+    } else {
+        ::MessageBox(NULL, (wstring(L"Unable to open ") + logname.c_str()).c_str(), L"cppcryptfs", MB_OK | MB_ICONERROR);
+    }
+
+}
+
+void crypt_at_start()
+{
+    if (g_UseLogFile) {
+        InitLogging();
+    }
+    SetDbgVars(g_DebugMode, g_UseStdErr, g_UseLogFile, g_DebugLogFile);
 }

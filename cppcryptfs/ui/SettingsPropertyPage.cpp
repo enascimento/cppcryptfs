@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -73,12 +73,19 @@ BEGIN_MESSAGE_MAP(CSettingsPropertyPage, CPropertyPage)
 	ON_BN_CLICKED(IDC_RESETWARNINGS, &CSettingsPropertyPage::OnClickedResetwarnings)
 	ON_BN_CLICKED(IDC_ENABLE_SAVING_PASSWORDS, &CSettingsPropertyPage::OnClickedEnableSavingPasswords)
 	ON_BN_CLICKED(IDC_NEVER_SAVE_HISTORY, &CSettingsPropertyPage::OnClickedNeverSaveHistory)
+	ON_BN_CLICKED(IDC_DELETE_SPURRIOUS_FILES, &CSettingsPropertyPage::OnClickedDeleteSpurriousFiles)
+	ON_BN_CLICKED(IDC_OPEN_ON_MOUNTING, &CSettingsPropertyPage::OnClickedOpenOnMounting)
+	ON_BN_CLICKED(IDC_ENCRYPT_KEYS_IN_MEMORY, &CSettingsPropertyPage::OnClickedEncryptKeysInMemory)
+	ON_BN_CLICKED(IDC_CACHE_KEYS_IN_MEMORY, &CSettingsPropertyPage::OnClickedCacheKeysInMemory)
+	ON_BN_CLICKED(IDC_FAST_MOUNTING, &CSettingsPropertyPage::OnBnClickedFastMounting)
 END_MESSAGE_MAP()
 
 
 // CSettingsPropertyPage message handlers
 
-static int buffer_sizes[] = { 4, 8, 16, 32, 64, 128, 256, 512, 1024 };
+typedef int buffer_size_t;
+
+static buffer_size_t buffer_sizes[] = { 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, MAX_IO_BUFFER_KB };
 
 static int ttls[] = { 0, 1, 2, 5, 10, 15, 30, 45, 60, 90, 120, 300, 600, 900, 1800, 3600};
 
@@ -97,6 +104,15 @@ BOOL CSettingsPropertyPage::OnInitDialog()
 
 	int bufferblocks = theApp.GetProfileInt(L"Settings", L"BufferBlocks", BUFFERBLOCKS_DEFAULT);
 
+	buffer_size_t kb = bufferblocks * 4;
+	
+	auto p = bsearch(&kb, buffer_sizes, _countof(buffer_sizes), sizeof(buffer_size_t), [](const void* pkey, const void* pval) -> int {
+		return *reinterpret_cast<const buffer_size_t*>(pkey) - *reinterpret_cast<const buffer_size_t*>(pval);
+	});
+
+	if (!p)
+		bufferblocks = BUFFERBLOCKS_DEFAULT;
+
 	int cachettl = theApp.GetProfileInt(L"Settings", L"CacheTTL", CACHETTL_DEFAULT);
 
 	bool bCaseInsensitive = theApp.GetProfileInt(L"Settings", L"CaseInsensitive", CASEINSENSITIVE_DEFAULT) != 0;
@@ -108,18 +124,42 @@ BOOL CSettingsPropertyPage::OnInitDialog()
 
 	bool bNeverSaveHistory = NeverSaveHistory();
 
+	bool bDeleteSpurriousFiles = theApp.GetProfileInt(L"Settings", L"DeleteSpurriousFiles",
+											DELETE_SPURRIOUS_FILES_DEFAULT) != 0;
+
+	bool bOpenOnMounting = theApp.GetProfileIntW(L"Settings", L"OpenOnMounting",
+											OPEN_ON_MOUNTING_DEFAULT) != 0;
+
+	bool bEncryptKeysInMemory = theApp.GetProfileIntW(L"Settings", L"EncryptKeysInMemory",
+											ENCRYPT_KEYS_IN_MEMORY_DEFAULT) != 0;
+
+	bool bCacheKeysInMemory = theApp.GetProfileIntW(L"Settings", L"CacheKeysInMemory",
+											CACHE_KEYS_IN_MEMORY_DEFAULT) != 0;
+
+	bool bFastMounting = theApp.GetProfileIntW(L"Settings", L"FastMounting",
+		FAST_MOUNTING_DEFAULT) != 0;
+
+
 	return SetControls(nThreads, bufferblocks, cachettl, bCaseInsensitive, bMountManager, 
-								bEnableSavingPasswords, bNeverSaveHistory);
+								bEnableSavingPasswords, bNeverSaveHistory, bDeleteSpurriousFiles, bOpenOnMounting,
+								bEncryptKeysInMemory, bCacheKeysInMemory, bFastMounting);
 }
 
 BOOL CSettingsPropertyPage::SetControls(int nThreads, int bufferblocks, int cachettl, 
-						bool bCaseInsensitive, bool bMountManager, bool bEnableSavingPasswords, bool bNeverSaveHistory)
+						bool bCaseInsensitive, bool bMountManager, bool bEnableSavingPasswords, bool bNeverSaveHistory,
+						bool bDeleteSpurriousFiles, bool bOpenOnMounting, bool bEncryptKeysInMemory,
+						bool bCacheKeysInMemory, bool bFastMounting)
 {
 
 	m_bCaseInsensitive =  bCaseInsensitive;
 	m_bMountManager = bMountManager;
 	m_bEnableSavingPasswords = bEnableSavingPasswords;
 	m_bNeverSaveHistory = bNeverSaveHistory;
+	m_bDeleteSpurriousFiles = bDeleteSpurriousFiles;
+	m_bOpenOnMounting = bOpenOnMounting;
+	m_bEncryptKeysInMemory = bEncryptKeysInMemory;
+	m_bCacheKeysInMemory = bCacheKeysInMemory;
+	m_bFastMounting = bFastMounting;
 
 	int i;
 
@@ -132,7 +172,10 @@ BOOL CSettingsPropertyPage::SetControls(int nThreads, int bufferblocks, int cach
 
 	WCHAR buf[80];
 
-	for (i = 0; i < 15; i++) {
+#define DOKAN_MAX_THREAD 63 // this is defined in a header file that Dokany doesn't distribute
+
+	for (i = 0; i <= DOKAN_MAX_THREAD; i++) {
+		
 		if (i == 0) {
 			CString def = L"Dokany default (";
 			WCHAR buf[32];
@@ -199,6 +242,16 @@ BOOL CSettingsPropertyPage::SetControls(int nThreads, int bufferblocks, int cach
 	CheckDlgButton(IDC_ENABLE_SAVING_PASSWORDS, m_bEnableSavingPasswords ? 1 : 0);
 
 	CheckDlgButton(IDC_NEVER_SAVE_HISTORY, m_bNeverSaveHistory ? 1 : 0);
+
+	CheckDlgButton(IDC_DELETE_SPURRIOUS_FILES, m_bDeleteSpurriousFiles ? 1 : 0);
+
+	CheckDlgButton(IDC_OPEN_ON_MOUNTING, m_bOpenOnMounting ? 1 : 0);
+
+	CheckDlgButton(IDC_ENCRYPT_KEYS_IN_MEMORY, m_bEncryptKeysInMemory ? 1 : 0);
+
+	CheckDlgButton(IDC_CACHE_KEYS_IN_MEMORY, m_bCacheKeysInMemory ? 1 : 0);
+
+	CheckDlgButton(IDC_FAST_MOUNTING, m_bFastMounting ? 1 : 0);
 
 	return TRUE;  // return TRUE unless you set the focus to a control
 				  // EXCEPTION: OCX Property Pages should return FALSE
@@ -275,11 +328,21 @@ void CSettingsPropertyPage::SaveSettings()
 	m_bMountManager = !m_bMountManager; // ditto
 	m_bEnableSavingPasswords = !m_bEnableSavingPasswords; // ditto
 	m_bNeverSaveHistory = !m_bNeverSaveHistory; // ditto
+	m_bDeleteSpurriousFiles = !m_bDeleteSpurriousFiles; // ditto
+	m_bOpenOnMounting = !m_bOpenOnMounting; // ditto
+	m_bEncryptKeysInMemory = !m_bEncryptKeysInMemory; // ditto
+	m_bCacheKeysInMemory = !m_bCacheKeysInMemory; // ditto
+	m_bFastMounting = !m_bFastMounting; // ditto
 
 	OnBnClickedCaseinsensitive();
 	OnClickedMountmanager();
 	OnClickedEnableSavingPasswords();
 	OnClickedNeverSaveHistory();
+	OnClickedDeleteSpurriousFiles();
+	OnClickedOpenOnMounting();
+	OnClickedEncryptKeysInMemory();
+	OnClickedCacheKeysInMemory();
+	OnBnClickedFastMounting();
 }
 
 void CSettingsPropertyPage::OnBnClickedDefaults()
@@ -288,7 +351,8 @@ void CSettingsPropertyPage::OnBnClickedDefaults()
 
 	SetControls(PER_FILESYSTEM_THREADS_DEFAULT, BUFFERBLOCKS_DEFAULT, CACHETTL_DEFAULT, 
 		CASEINSENSITIVE_DEFAULT, MOUNTMANAGER_DEFAULT, ENABLE_SAVING_PASSWORDS_DEFAULT,
-		NEVER_SAVE_HISTORY_DEFAULT);
+		NEVER_SAVE_HISTORY_DEFAULT, DELETE_SPURRIOUS_FILES_DEFAULT, OPEN_ON_MOUNTING_DEFAULT,
+		ENCRYPT_KEYS_IN_MEMORY_DEFAULT, CACHE_KEYS_IN_MEMORY_DEFAULT, FAST_MOUNTING_DEFAULT);
 
 	SaveSettings();
 }
@@ -300,7 +364,8 @@ void CSettingsPropertyPage::OnBnClickedRecommended()
 
 	SetControls(PER_FILESYSTEM_THREADS_RECOMMENDED, BUFFERBLOCKS_RECOMMENDED, CACHETTL_RECOMMENDED, 
 		CASEINSENSITIVE_RECOMMENDED, MOUNTMANAGER_RECOMMENDED, ENABLE_SAVING_PASSWORDS_RECOMMENDED,
-		NEVER_SAVE_HISTORY_RECOMMENDED);
+		NEVER_SAVE_HISTORY_RECOMMENDED, DELETE_SUPRRIOUS_FILES_RECOMMENDED, OPEN_ON_MOUNTING_RECOMMENDED,
+		ENCRYPT_KEYS_IN_MEMORY_RECOMMENDED, CACHE_KEYS_IN_MEMORY_RECOMMENDED, FAST_MOUNTING_RECOMMENDED);
 
 	SaveSettings();
 }
@@ -401,4 +466,62 @@ void CSettingsPropertyPage::OnClickedNeverSaveHistory()
 							MB_OK | MB_ICONEXCLAMATION);
 		}
 	}
+}
+
+
+void CSettingsPropertyPage::OnClickedDeleteSpurriousFiles()
+{
+	// TODO: Add your control notification handler code here
+	m_bDeleteSpurriousFiles = !m_bDeleteSpurriousFiles;
+
+	CheckDlgButton(IDC_DELETE_SPURRIOUS_FILES, m_bDeleteSpurriousFiles ? 1 : 0);
+
+	theApp.WriteProfileInt(L"Settings", L"DeleteSpurriousFiles", m_bDeleteSpurriousFiles ? 1 : 0);
+}
+
+
+void CSettingsPropertyPage::OnClickedOpenOnMounting()
+{
+	// TODO: Add your control notification handler code here
+	m_bOpenOnMounting = !m_bOpenOnMounting;
+
+	CheckDlgButton(IDC_OPEN_ON_MOUNTING, m_bOpenOnMounting ? 1 : 0);
+
+	theApp.WriteProfileInt(L"Settings", L"OpenOnMounting", m_bOpenOnMounting ? 1 : 0);
+}
+
+
+void CSettingsPropertyPage::OnClickedEncryptKeysInMemory()
+{
+	// TODO: Add your control notification handler code here
+
+	m_bEncryptKeysInMemory = !m_bEncryptKeysInMemory;
+
+	CheckDlgButton(IDC_ENCRYPT_KEYS_IN_MEMORY, m_bEncryptKeysInMemory ? 1 : 0);
+
+	theApp.WriteProfileInt(L"Settings", L"EncryptKeysInMemory", m_bEncryptKeysInMemory ? 1 : 0);
+}
+
+
+void CSettingsPropertyPage::OnClickedCacheKeysInMemory()
+{
+	// TODO: Add your control notification handler code here
+
+	m_bCacheKeysInMemory = !m_bCacheKeysInMemory;
+
+	CheckDlgButton(IDC_CACHE_KEYS_IN_MEMORY, m_bCacheKeysInMemory ? 1 : 0);
+
+	theApp.WriteProfileInt(L"Settings", L"CacheKeysInMemory", m_bCacheKeysInMemory ? 1 : 0);
+}
+
+
+void CSettingsPropertyPage::OnBnClickedFastMounting()
+{
+	// TODO: Add your control notification handler code here
+
+	m_bFastMounting = !m_bFastMounting;
+
+	CheckDlgButton(IDC_FAST_MOUNTING, m_bFastMounting ? 1 : 0);
+
+	theApp.WriteProfileInt(L"Settings", L"FastMounting", m_bFastMounting ? 1 : 0);
 }

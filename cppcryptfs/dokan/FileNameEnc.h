@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -61,6 +61,7 @@ private:
 	string *m_actual_encrypted;
 	wstring m_plain_path;
 	CryptContext *m_con;
+	KeyDecryptor m_KeyDecryptor;
 	bool m_tried;
 	bool m_failed;
 	bool m_file_existed; // valid only if case cache is used
@@ -89,6 +90,7 @@ private:
 	void AssignPlainPath(LPCWSTR plain_path);
 
 public:
+	FileNameEnc() = delete;
 	FileNameEnc(PDOKAN_FILE_INFO DokanFileInfo, const WCHAR *fname,
 		string *actual_encrypted = NULL,
 		bool ignorecasecache = false);

@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -39,6 +39,7 @@ THE SOFTWARE.
 #include "crypt/siv.h"
 #include "filename/casecache.h"
 #include "context/FsInfo.h"
+#include "file/openfiles.h"
 
 // number of threads Dokany uses if threads is 0. Found from code inspection, not in header file
 #define CRYPT_DOKANY_DEFAULT_NUM_THREADS 5 
@@ -55,12 +56,16 @@ public:
 	CaseCache m_case_cache;
 	EmeCryptContext m_eme;
 	SivContext m_siv;
-	mutex m_file_pointer_mutex;
 	int m_bufferblocks;
 	int m_cache_ttl;
 	int m_threads;
 	bool m_recycle_bin;
 	bool m_read_only;
+	bool m_delete_spurrious_files;
+	bool m_encryptKeysInMemory;
+	bool m_cacheKeysInMemory;
+	vector<wstring> m_deletable_files;
+	CryptOpenFiles m_openfiles;
 private:
 	bool m_caseinsensitive;
 public:
@@ -80,6 +85,10 @@ public:
 	CryptContext();
 
 	CryptConfig *GetConfig() const { return m_config; };
+
+	bool FinalInitBeforeMounting(bool use_key_cache);
+
+	const vector<wstring>& GetDeletableFiles() { return m_deletable_files; }
 
 	virtual ~CryptContext();
 };

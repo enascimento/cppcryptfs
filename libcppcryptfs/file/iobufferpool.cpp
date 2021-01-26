@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -29,77 +29,91 @@ THE SOFTWARE.
 #include "stdafx.h"
 #include "iobufferpool.h"
 
-IoBuffer::IoBuffer(bool fromPool, size_t bufferSize)
-{
-	m_bIsFromPool = fromPool;
-	m_bufferSize = bufferSize;
-	m_pBuf = NULL;
-	m_pBuf = new unsigned char[bufferSize];
+IoBufferPool IoBufferPool::instance;
+
+IoBufferPool& IoBufferPool::getInstance()
+{	
+	return instance;
 }
 
-IoBuffer::~IoBuffer()
+void IoBuffer::reallocate(size_t bufferSize, size_t ivbufferSize)
 {
-	if (m_pBuf)
-		delete[] m_pBuf;
-}
+	auto total_size = bufferSize + ivbufferSize;
 
-void IoBufferPool::lock()
-{
-	EnterCriticalSection(&m_crit);
-}
-
-void IoBufferPool::unlock()
-{
-	LeaveCriticalSection(&m_crit);
-}
-
-void IoBufferPool::init(size_t buffer_size)
-{
-	if (buffer_size == 0) {
-		throw std::runtime_error("error: attempting to init IoBufferPool with buffer_size of 0");
+	if (m_storage.size() < total_size) {
+		m_storage.clear();
+		m_storage.resize(max(total_size, min(m_storage.size() * 2, IoBufferPool::m_max_pool_buffer_size)));				
 	}
-	m_buffer_size = buffer_size;
-	m_num_buffers = 0;
-	InitializeCriticalSection(&m_crit);
+
+	if (bufferSize > 0) {
+		m_pBuf = &m_storage[0];
+	} else {
+		m_pBuf = nullptr;
+	}
+
+	if (ivbufferSize > 0) {
+		m_pIvBuf = &m_storage[bufferSize];
+	} else {
+		m_pIvBuf = nullptr;
+	}
 }
+
+IoBuffer::IoBuffer(bool fromPool, size_t bufferSize, size_t ivbufferSize) : m_bIsFromPool(fromPool)
+{		
+	reallocate(bufferSize, ivbufferSize);
+}
+
+
 
 IoBufferPool::~IoBufferPool()
 {
 	for (IoBuffer* pBuf : m_buffers) {
 		delete pBuf;
-	}
-
-	if (m_buffer_size) { // was initialized
-		DeleteCriticalSection(&m_crit);
-	}
+	}	
 }
 
-IoBuffer * IoBufferPool::GetIoBuffer(size_t buffer_size)
-{
-	IoBuffer *pb = NULL;
 
-	if (buffer_size <= m_buffer_size) {
-		lock();
-		try {
-			if (m_buffers.size() > 0) {
-				pb = m_buffers.front();
+IoBuffer * IoBufferPool::GetIoBuffer(size_t buffer_size, size_t ivbuffer_size)
+{
+
+	IoBuffer* pb = nullptr;
+
+	bool will_be_from_pool = false;
+
+	auto total_size = buffer_size + ivbuffer_size;
+
+	if (total_size <= m_max_pool_buffer_size) {
+
+		lock_guard<mutex> lock(m_mutex);
+
+		if (!m_buffers.empty()) {
+			pb = m_buffers.front();			
+			if (total_size > pb->m_storage.size()) {				
+				auto growth = total_size - pb->m_storage.size();
+				if (m_current_size + growth > m_max_size) {			
+					pb = nullptr;
+				} else {
+					m_current_size += growth;
+				}
+			}			
+			if (pb) {
 				m_buffers.pop_front();
-			} else if (m_num_buffers < m_max_buffers) {
-				pb = new IoBuffer(true, m_buffer_size);
-				m_num_buffers++;
 			}
-		} catch (...) {
-			pb = NULL;
-		}
-		unlock();
-	} 
-	if (pb == NULL) {
-		try {
-			pb = new IoBuffer(false, buffer_size);
-		} catch (...) {
-			pb = NULL;
-		}
+		} else if (m_current_size + total_size <= m_max_size) {
+			will_be_from_pool = true;
+			m_current_size += total_size;
+		}		
 	}
+
+	try {
+		if (pb) {
+			pb->reallocate(buffer_size, ivbuffer_size);
+		} else {
+			pb = new IoBuffer(will_be_from_pool, buffer_size, ivbuffer_size);
+		}
+	} catch (const std::bad_alloc&) {
+		pb = nullptr;
+	}	
 	
 	return pb;
 }
@@ -107,10 +121,16 @@ IoBuffer * IoBufferPool::GetIoBuffer(size_t buffer_size)
 void IoBufferPool::ReleaseIoBuffer(IoBuffer * pBuf)
 {
 
+	if (!pBuf)
+		return;
+
 	if (pBuf->m_bIsFromPool) {
-		lock();
-		m_buffers.push_front(pBuf);
-		unlock();
+		lock_guard<mutex> lock(m_mutex);
+		try {
+			m_buffers.push_front(pBuf);
+		} catch (const std::bad_alloc&) {
+			delete pBuf;
+		}		
 	} else {
 		delete pBuf;
 	}

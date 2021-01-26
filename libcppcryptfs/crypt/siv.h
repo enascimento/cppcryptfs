@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -36,11 +36,13 @@ THE SOFTWARE.
 #define SIV_KEY_ENCRYPT_HIGH_INDEX 2
 #define SIV_KEY_DECRYPT_HIGH_INDEX 3
 
+class CryptConfig;
+
 class SivContext {
 
 public:
 
-	bool SetKey(const unsigned char *key, int keylen, bool hkdf); // keylen must be 32
+	bool SetKey(const unsigned char *key, int keylen, bool hkdf, CryptConfig *pConfig); // keylen must be 32
 																  // disallow copying
 	SivContext(SivContext const&) = delete;
 	void operator=(SivContext const&) = delete;

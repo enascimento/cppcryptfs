@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -69,12 +69,12 @@ DirIvCache::DirIvCache()
 DirIvCache::~DirIvCache()
 {
 
-	for (auto it = m_lru_list.begin(); it != m_lru_list.end(); it++) {
+	for (auto it = m_lru_list.begin(); it != m_lru_list.end(); ++it) {
 		DirIvCacheNode *node = *it;
 		delete node;
 	}
 
-	for (auto it = m_spare_node_list.begin(); it != m_spare_node_list.end(); it++) {
+	for (auto it = m_spare_node_list.begin(); it != m_spare_node_list.end(); ++it) {
 		DirIvCacheNode *node = *it;
 		delete node;
 	}
@@ -197,7 +197,7 @@ bool DirIvCache::lookup(LPCWSTR path, unsigned char *dir_iv)
 
 	if (m_lookups && (m_lookups % 1024 == 0)) {
 		double ratio = (double)m_hits / (double)m_lookups;
-		DbgPrint(L"DirIvCache: %I64d lookups, %I64d hits, %I64d misses, hit ratio %0.2f%%\n", m_lookups, m_hits, m_lookups - m_hits, ratio*100);
+		//DbgPrint(L"DirIvCache: %I64d lookups, %I64d hits, %I64d misses, hit ratio %0.2f%%\n", m_lookups, m_hits, m_lookups - m_hits, ratio*100);
 	}
 
 	unlock();

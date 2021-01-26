@@ -2,7 +2,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -102,8 +102,13 @@ void CCreatePropertyPage::CreateCryptfs()
 	if (!pWnd)
 		return;
 
-	LockZeroBuffer<WCHAR> password(MAX_PASSWORD_LEN + 1);
-	LockZeroBuffer<WCHAR> password2(MAX_PASSWORD_LEN + 1);
+	LockZeroBuffer<WCHAR> password(MAX_PASSWORD_LEN + 1, false);
+	LockZeroBuffer<WCHAR> password2(MAX_PASSWORD_LEN + 1, false);
+
+	if (!password.IsLocked() || !password2.IsLocked()) {
+		MessageBox(L"could not lock password buffers", L"cppcryptefs", MB_OK | MB_ICONERROR);
+		return;
+	}
 
 	CSecureEdit *pPass = &m_password;
 
@@ -175,6 +180,7 @@ void CCreatePropertyPage::CreateCryptfs()
 	bool plaintext = false;
 	bool longfilenames = false;
 	bool reverse = false;
+	bool disablestreams = false;
 
 	CComboBox *pBox = (CComboBox *)GetDlgItem(IDC_FILENAME_ENCRYPTION);
 
@@ -194,6 +200,8 @@ void CCreatePropertyPage::CreateCryptfs()
 		longfilenames = IsDlgButtonChecked(IDC_LONG_FILE_NAMES) != 0;
 	}
 
+	disablestreams = IsDlgButtonChecked(IDC_DISABLE_STREAMS) != 0;
+
 	reverse = IsDlgButtonChecked(IDC_REVERSE) != 0;
 
 	pBox = (CComboBox *)GetDlgItem(IDC_DATA_ENCRYPTION);
@@ -212,7 +220,7 @@ void CCreatePropertyPage::CreateCryptfs()
 	GetDlgItemText(IDC_VOLUME_NAME, volume_name);
 
 	theApp.DoWaitCursor(1);
-	bool bResult = config.create(cpath, config_path, password.m_buf, eme, plaintext, longfilenames, siv, reverse, volume_name, error_mes);
+	bool bResult = config.create(cpath, config_path, password.m_buf, eme, plaintext, longfilenames, siv, reverse, volume_name, disablestreams, error_mes);
 	theApp.DoWaitCursor(-1);
 
 	if (!bResult) {
@@ -233,6 +241,10 @@ void CCreatePropertyPage::CreateCryptfs()
 	CString clfns = IsDlgButtonChecked(IDC_LONG_FILE_NAMES) ? L"1" : L"0";
 
 	theApp.WriteProfileStringW(L"CreateOptions", L"LongFileNames", clfns);
+
+	CString cdisablestreams = IsDlgButtonChecked(IDC_DISABLE_STREAMS) ? L"1" : L"0";
+
+	theApp.WriteProfileStringW(L"CreateOptions", L"DisableStreams", cdisablestreams);
 
 	CString creverse = IsDlgButtonChecked(IDC_REVERSE) ? L"1" : L"0";
 
@@ -325,6 +337,8 @@ BOOL CCreatePropertyPage::OnInitDialog()
 
 	CString clfns = theApp.GetProfileStringW(L"CreateOptions", L"LongFileNames", L"1");
 
+	CString cdisablestreams = theApp.GetProfileStringW(L"CreateOptions", L"DisableStreams", L"0");
+
 	CString creverse = theApp.GetProfileStringW(L"CreateOptions", L"Reverse", L"0");
 
 	CString cfnenc = theApp.GetProfileStringW(L"CreateOptions", L"FilenameEncryption", L"AES256-EME");
@@ -332,6 +346,8 @@ BOOL CCreatePropertyPage::OnInitDialog()
 	CString cdataenc = theApp.GetProfileStringW(L"CreateOptions", L"DataEncryption", L"AES256-GCM");
 
 	CheckDlgButton(IDC_LONG_FILE_NAMES, clfns == L"1");
+
+	CheckDlgButton(IDC_DISABLE_STREAMS, cdisablestreams == L"1");
 
 	CheckDlgButton(IDC_REVERSE, creverse == L"1");
 
@@ -457,3 +473,4 @@ void CCreatePropertyPage::OnClickedSelectConfigPath()
 	if (pWnd)
 		pWnd->SetWindowTextW(cpath);
 }
+

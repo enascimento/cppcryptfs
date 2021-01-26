@@ -8,7 +8,7 @@ cppcryptfs is based on the design of [gocryptfs](https://github.com/rfjakob/gocr
 
 cppcryptfs is an implementation of the gocryptfs filesystem in C++ for Windows.  cppcryptfs is compatible with gocryptfs.  Filesystems created with one can generally be mounted (and synced) with the other.   Please see the statement on compatibility near the end of this document.
 
-cppcrypts provides on-the-fly, at-rest and in-the-cloud encryption of files and file names in a virtual filesystem.  It uses the the [Dokany](https://github.com/dokan-dev/dokany) driver and library to provide a virtual fileystem in user mode under Windows.
+cppcrypts provides on-the-fly, at-rest and in-the-cloud encryption of files and file names in a virtual filesystem.  It uses the [Dokany](https://github.com/dokan-dev/dokany) driver and library to provide a virtual fileystem in user mode under Windows.
 
 
 You can use cppcryptfs to create an encrypted filesystem in a folder.  The encrypted filesystem is protected with a password that you choose.  
@@ -33,7 +33,7 @@ Another advantage of per-file encryption over container-based encryption is that
 Current Status
 --------------
 
-The developer has been using cppcryptfs in forward (normal) mode for over two years and hasn't lost
+The developer has been using cppcryptfs in forward (normal) mode for over three years and hasn't lost
 any data.  At least one other person is using it.
 
 Reverse mode has undergone only limited testing by the developer.
@@ -46,16 +46,18 @@ It is always prudent to keep backups of your data in case something goes wrong.
 Testing
 -------  
 
-cppcryptfs passes 500/500 tests in [winfstest](https://github.com/bailey27/winfstest) when run as administrator.  Without administrator privileges, cppcryptfs passes 494/500 tests.  This winfstest is forked from the version
+cppcryptfs passes 506/506 tests in [winfstest](https://github.com/bailey27/winfstest) when run as administrator.  Without administrator privileges, cppcryptfs passes 500/506 tests.  This winfstest is forked from the version
 used by the Dokany project.  The Dokany team added additional tests.
 
 The tests that cppcryptfs fails when run without administrator privileges have to do with operations on DACLs (Discretionary Access Control Lists).  cppcryptfs must be run as administrator for these operations to work.  Running without administrator privileges doesn't seem to affect the normal usage of cppcryptfs.
+
+Note: It appears that Windows 10 Version 1909 (OS Build 18363.1016) allows cppcryptfs to pass all 506 tests without having to be run as administrator.
 
 
 Build Requirements
 -----
 	
-	Microsoft Visual Studio 2017 Community Edition, perl, nasm, and git (all free)
+	Microsoft Visual Studio 2019 Community Edition, perl, nasm, and git (all free)
 	OpenSSL - https://github.com/openssl/openssl (static build required)
 	RapidJSON - https://github.com/miloyip/rapidjson (for parsing gocryptfs.conf)
 	Dokany - https://github.com/dokan-dev/dokany
@@ -68,7 +70,7 @@ Build Requirements
 
 There are detailed build instructions in [INSTALL.md](INSTALL.md).
 
-cppcryptfs is currently up-to-date with Dokany 1.2.2.1000
+cppcryptfs is currently up-to-date with Dokany 1.4.0.1000
 
 
 Use
@@ -96,6 +98,10 @@ It is strongly recommended that this directory reside on an NTFS filesystem.
 
 Then you need to choose a (hopefully strong) password and repeat it.  The dialog box will accept at most 255 characters for the password.
 
+The password field class treats one character as special. This character looks like a small x, but not the same. It's unicode 215 which is 0xd7 in hex.
+
+The result is you cannot use that character in a password.
+
 You can choose to have your file names encryped using AES256-EME or not to encrypt the file names (plain text).
 
 If "Long file names" is checked, then the names of files and directories can be up to 255 characters long when encrypted file names are used.  This option has no effect if plain text file names are used (plain text file names can be up to 255 characters long). See the section "File name and path length limits" near the end of this document for more information.  
@@ -116,12 +122,16 @@ The volume label is AES256-GCM encrypted using the master key and a 128-bit rand
 
 You can right click on the mounted drive letter in File Explorer, select "Properties", and change the volume label.  However, doing so will cause cppcryptfs to re-write gocryptfs.conf when the drive is dismounted. This does entail some risk to your gocryptfs.conf.  Again, it's a good a idea to back up your gocryptfs.conf file somewhere.  
 
+The "Disable named streams" option may be needed if the underlying filesystem (e.g. a Linux filesystem shared via Samba) does not support named streams.  cppcryptfs normally automatically detects (at mount time) if the underlying filesystem supports named streams. However, in some configurations, the underlying filesystem is reporting that it supports named streams when it actually does not.  The developer has tested with Ubuntu 16.04 Samba and does not have this problem.  This feature was added to help a user who was having this problem with a different Linux version.  Please see https://github.com/bailey27/cppcryptfs/issues/63 if you are having issues with Samba and would like to retro-actively disable named streams after creating your filesystem.
+
 Then go to the "Mount" tab and select a drive letter and select the folder you
 just created the filesystem in.  Then enter the password and click on the "Mount" button.
 
 ![Alt text](/screenshots/screenshot_mount.png?raw=true "Mount tab")
 
 You can also right-click in the list of drive letters and select "Add Mount Point".  This will let you add an empty directory to the list of drive letters.  This empty directory, which must be on an NTFS volume, can serve as a mount point in place of a drive letter.  The added mount point will be added to the list below the drive letters.  You can also right click on an added mount point and delete it from the list.  The mount point directories you add are saved in the Windows registry.
+
+NOTE: Though A: and B: are useable as mount points, it is not recommended to use them because mounting an encrypted filesystem to them has been known to cause problems with Windows Update.
 
 You can also right-click on a mounted filesystem and dismount it or [view its properties.](/screenshots/screenshot_properties.png?raw=true) 
 
@@ -217,7 +227,6 @@ This setting enables the Windows Mount Manager on the encrypted volume.  Enablin
 This setting has no effect on reverse filesystems or when filesystems are mounted read-only.
 
 Note:  If you are syncing the encrypted files of your filesystem with Dropbox, then if you enable mount manger (recycle bin), then Dropbox will not be able to sync the files in the recycle bin because it does not have sufficient privileges.  
-
 You should either run Dropbox as Administrator, or you should determine which encrypted folder name is the name of the recycle bin and exclude it using the selective sync feature of Dropbox.  If you are using plaintext file names, then the recycle bin will be simply "$RECYCLE.BIN". The --list command line switch, if given the (unencrypted) path to the root directory of the filesystem as an argument, can be used to find the encrypted name of the recycle bin.
 
 e.g.
@@ -252,13 +261,64 @@ To delete saved passwords, you must un-check the "save passwords" setting.
 
 This setting is not enabled in either the Default or Recommended settings.
 
+**Delete desktop.ini files**
+
+This setting was created for https://github.com/bailey27/cppcryptfs/issues/62.  It was reported that Google Drive can create hidden desktop.ini files in every directory in the source folder of encrypted files.  These files were preventing users from deleting directories from the un-encrypted side.  If the filesystem is mounted with this setting on, then cppcryptfs will automatically delete unencrypted desktop.ini files when deleting a directory.  
+
+This setting has effect only in forward mode and only if encrypted filenames are used.
+
+This setting is not enabled in either the Default or Recommended settings.
+
+**Open on mounting**
+
+If this setting is enabled, then when an encrypted volume is mounted, it will automatically be opened using the default Windows file management program which is is normally File Explorer.
+
+This setting is not enabled in either the Default or Recommended settings.
+
+**Encrypt Keys in Memory**
+
+When this setting is enabled, cppcryptfs keeps the encryption keys (the primary key and any derived keys) encrypted using the Windows Data Protection API (DPAPI) when they are not needed.  The keys are encrypted using DPAPI, and they are unencrypted when needed and then the unencrypted copies are zeroed out when not needed.  See the section on "Saved Passwords" below for more information about DPAPI.
+
+This setting reduces the chance of malicious software being able to read the unencrypted keys from cppcyrptfs's process memory.  
+
+Also, this setting prevents the unencrypted keys from ending up on disk in the hibernation file if the system goes into hibernation.
+
+This setting is brand new, and **any bugs in its implementation could cause data loss**.  It is recommened to use this setting only if you make frequent backups of your encrypted filesystems.
+
+It is recommended to use "Cache Keys in Memory" (see below) with this setting. Otherwise there will be a signficant impact on performance if you do not enable "Cache Keys in Memory".
+
+This setting is not enabled in either the Default or Recommended settings.
+
+**Cache Keys in Memory**
+
+This setting has no effect unless "Encrypt Keys in Memory" is enabled.
+
+When this setting is enabled and encrypt keys in memory is also enabled, then cppcryptfs will cache the unencrypted keys between uses for up to one second.
+
+This setting reduces the performance impact of "Encrypt Keys in Memory" to essentially zero.  Without this setting enabled, encrypt keys in memory significantly reduces performance.
+
+When the system is about to enter standby or hibernation modes, cppcryptfs automatically disables the cache so when the system enters the low power mode, the unencrypted keys won't be in memory.  The cache is automatically re-enabled when the system wakes up.
+
+This setting is not enabled in either the Default or Recommended settings.
+
 **Defaults and Recommended**
 
 Currently, the default and recommended settings are the same.
 
-You can view the previous default settings here
+**Enable fast mounting**
 
-[Previous default settings screenshot](/screenshots/screenshot_previous_defaults.png?raw=true) 
+Previously, cppcryptfs would always wait for Dokany to call back to indicate whether or not a mount operation succeeded or failed.
+
+Dokany was taking typically 5 seconds to call back.  However, the filesystem appeared to be mounted and available almost instantly.
+
+When Enable fast mounting is turned on, cppcryptfs will both wait for Dokany's callback and periodically check (poll) to see
+if the filesystem is mounted.  If cppcryptfs discovers that the filesystem appears to be mounted, then cppcryptfs will stop waiting on Dokany and assume the mount operation succeeded.  If this setting is disabled, then cppcryptfs will only wait for the callback from Dokany.
+
+With this setting enabled, a successful mount operation is indicated as such on the developer's machine in about 31 milliseconds instead of 5 seconds as before.
+
+Note:  this setting has no effect when the mount point is an empty NTFS directory and not a drive letter.  Dokany signals a successful mounting quickly if the mount point is a directory, and polling doesn't make sense in this case.
+
+This setting is enabled by default.
 
 **Reset Warnings**
 
@@ -325,36 +385,71 @@ Command Line Options
 ----
 cppcryptfs accepts some command line options for mounting and unmounting filesystems.  Currently, filesystems can be created only by using the gui.
 
-Passwords passed through the command line are not really secure.  cppcryptfs locks and zeros its internal copies of the command line, but, for example, it does not zero the command line stored in the Windows PEB (Process Environment Block). Also, if cppcyrptfs is already running, then an invocation of cppcryptfs from the command line will cause it to pass the command line to the already running instance in the clear using a WM_COPYDATA message. It is unknown how many times the command line might be copied by Windows out of cppcryptfs' control.  So there is some chance that a password passed via the command line might end up in the paging file if a paging file is being used.
+There can be only one main instance of cppcryptfs running.  If no other instance of cppcryptfs is running, then cppcryptfs processes any command line arguments and then continues
+to run.  If there is already another instance of cppcryptfs running, then cppcryptfs will send its command line arguments to the main, already-running, instance.  If run from a
+console window, it will print any output from processing the command line to the console. If not run from a console, it will display the output in a message box.
+
+There is also a companion program, cppcryptfsctl, that can be used to send commands to an already-running cppcryptfs.  cppcryptfsctl is a console program.  The
+advantage of using it is that it sets ERRORLEVEL so this can be tested in batch scripts.  Also, it is possible to redirect the output of cppcryptfsctl to a file
+or pipe it to another program like grep of findstr.  cppcryptfs does not set ERRORLEVEL, and its output cannot be redirected.
+
+cppcryptfsctl sets ERRORLEVEL to 0 on success, to 1 if an error occurs, and to 2 if it cannot connect which implies  that cppcryptfs isn't running.
+
+Passwords passed through the command line are not really secure.  cppcryptfs locks and zeros its internal copies of the command line, but, for example, it does not zero the command line stored in the Windows PEB (Process Environment Block). Also, if cppcyrptfs is already running, then an invocation of cppcryptfs (or cppcryptfsctl) from the command line will cause it to pass the command line to the already running instance. It tries to do this in a fairly secure way.  It communicates with the running instance using a local Windows named pipe. If the program running on either side of the pipe is signed, then it verifies that the program on the other end of the pipe is also running from a signed executable and that the common name on both signatures are the same.  However, it is unknown how many times the command line might be copied by Windows out of cppcryptfs' control.  So there is some chance that a password passed via the command line might end up in the paging file if a paging file is being used.
 
 ```
-usage: cppcryptfs [OPTIONS]
+Usage: cppcryptfs/cppcryptfsctl [OPTIONS]
 
 Mounting:
-  -m, --mount=PATH      mount filesystem located at PATH
-  -d, --drive=D         mount to drive letter D
-  -p, --password=PASS   use password PASS
-  -P, --saved-password  use saved password
-  -r, --readonly        mount read-only
-  -c, --config=PATH     path to config file
-  -s, --reverse         mount reverse filesystem
+  -m, --mount=PATH         mount filesystem located at PATH
+  -d, --drive=D            mount to drive letter D or empty dir DIR
+  -p, --password=PASS      use password PASS
+  -P, --saved-password     use saved password
+  -r, --readonly           mount read-only
+  -c, --config=PATH        path to config file for init/mount
+  -s, --reverse            init/mount reverse filesystem (implies siv for init)
 
 Unmounting:
-  -u, --unmount=D       unmount drive letter D or dir DIR
-  -u, --unmount=all     unmount all drives
+  -u, --unmount=D          unmount drive letter D or dir DIR
+  -u, --unmount=all        unmount all drives
 
 Misc:
-  -t, --tray            hide in system tray
-  -x, --exit            exit if no drives mounted
-  -l, --list            list available and mounted drive letters (with paths)
-  -ld:\p, --list=d:\p   list encrypted and plaintext filenames
-  -i, --info=D          show information about mounted filesystem
-  -v, --version         print version
-  -h, --help            display this help message
+  -t, --tray               hide in system tray
+  -x, --exit               exit if no drives mounted
+  -l, --list               list available and mounted drive letters (with paths)
+  -ld:\p, --list=d:\p      list plaintext and encrypted filenames
+  -C, --csv                file list is comma-delimited
+  -D, --dir                file list dirs first and w/ trailing \"\\\"
+  -i, --info=D             show information about mounted filesystem
+  -v, --version            print version (use --init -v for cppcryptfsctl ver)
+  -h, --help               display this help message
 
+Initializing (cppcryptfsctl only):
+  -I, --init=PATH          Initialize encrypted filesystem located at PATH
+  -V, --volumename=NAME    specify volume name for filesystem
+  -T, --plaintext          use plaintext filenames (default is AES256-EME)
+  -S, --siv                use AES256-SIV for data encryption (default is GCM)
+  -L, --longnames [0|1]    enable/disable LFNs. defaults to enabled (1)
+  -b, --streams   [0|1]    enable/disable streams. defaults to enabled (1)
+
+Recovery/Maintenance (cppcryptfsctl only):
+  --changepassword=PATH    Change password used to protect master key
+  --printmasterkey=PATH    Print master key in human-readable format
+  --recover=PATH           Prompt for master key and new password to recover
 ```
 
+Only cppcryptfsctl can create a filesystem from the command line(--init).  To create a filesystem with cppcryptfs you have to use the GUI.  
+
+When creating/initializing a filesystem, cppcryptfsctl will prompt for the password and repeat password without echo if run interactively. If its standard input is redirected, then it will read the password from standard input without prompting.
+
+To get the version of cppcryptfsctl, you must specify initialize and -v.  e.g. cppcryptfsctl -I -v, otherwise it will attempt to get and print the version of a running instance of cppcryptfs.
+
+Some options are common to both initializing and mounting (--config and --reverse).
+
 Note: when using the short version of the option, you should not use the equal sign between the option and its argument.  When using the long version of the option, the equal sign is optional. e.g. these will work
+
+Also, if you intend to mount a volume to a drive letter, then you should not include a \\ character in the argument to the drive option.  e.g. if you want to mount to drive "r:" use "-dr:" and not "-dr:\\".
+
 
 ```
 cppcryptfs -m c:\tmp\test -d k -p XYZ
@@ -366,7 +461,7 @@ cppcryptfs --mount c:\tmp\test --drive k --password XYZ
 The --list option has an optional argument.  If there is no argument given, then
 it lists the drive letters and shows the path to the root of the encrypted filesystem for mounted filesystems.  
 
-The list command also takes a full path as an optional agument.  The path should be the unencrypted name of a file or directory including the drive letter.  If the argument is a file, then cppcryptfs will print the unencrypted file path on the left and the encrypted path on the right.   If the argument is a directory, then cppcryptfs will print the unencrypted names of the files on the left and the encrypted names on the right.
+The list command also takes a full path as an optional argument.  The path should be the unencrypted name of a file or directory including the drive letter.  If the argument is a file, then cppcryptfs will print the unencrypted file path on the left and the encrypted path on the right.   If the argument is a directory, then cppcryptfs will print the unencrypted names of the files on the left and the encrypted names on the right.
 
 Because of the way optional arguments are handled, if you are using the short form of the list switch (-l), then you must put the path right after the -l with no space.  And if you are using the long form (--list), then you must use the "=" sign.  e.g.
 
@@ -377,17 +472,11 @@ cppcryptfs --list=k:\foo
 
 ```
 
-cppcryptfs is a Windows gui application and not a console application.  However, when started with command line options, it will try to write any error messages to the console (if any) that started it.
-
-Unfortunately, Windows does not seem to handle piping output that is generated this way.  You cannot pipe the output of cppcryptfs through other commands like sort or redirect it to a file.
-
 There can be only one instance of cppcryptfs running at any time.
 
 When cppcryptfs is invoked, it checks to see if there is another instance running.  If there is, then if there are no command line options, the second instance of cppcryptfs will simply exit.  If there isn't another instance running, then it will process the command line options (if any) and  will continue running unless --exit is specified and there are no mounted drives.
 
-If a second instance is invoked with command line options while another instance is running, the second instance will send its command line to the already-running instance using the WM_COPYDATA message.  It will block until the already-running instance has processed the command line and then exit.  Any error messages or other output that result from processing the command line will be printed in the cmd window in which the second instance was invoked.
-
-Therefore, if you plan to use cppcryptfs in batch files, you need to start an instance in the background first.  Then you should do the other operations in the foreground so they will block until completed.
+Therefore, if you plan to use cppcryptfs or cppcryptfsctl in batch files, you need to start an instance in the background first.  Then you should do the other operations in the foreground so they will block until completed.
 
 If you start "cppcryptfs --tray" in the background, then if there is already a running instance, then that instance will be told to hide itself in the system tray.  If there is not already an instance running, then you will have started cppcryptfs hidden in the system tray, running in the background. 
 
@@ -441,6 +530,79 @@ rsync .....
 /cygdrive/c/bin/cppcryptfs -u all -x
 
 ```
+
+Change Password
+------
+cppcryptfsctl has the ability to change the password that protects the master key in the config file (normally gocryptfs.conf or .gocryptfs.reverse.conf).
+
+This feature is mainly for people who just want to use a different password.  It is not a good solution for a compromised password.
+
+All changing the password does is change the password used to mount the filesystem.  It does not change the encryption key used to encrypt the data.  This is because the key that is used to encrypt the data is encrypted using a key derived from the password and stored in the config file.  So all the password is used for is to unencrypt the actual encryption key.
+
+Therefore, if somebody has your password and a copy of your old config file, then they would still be able to decrypt the data and any data you add or change
+after changing the password. 
+
+If you think your password has been compromised, and if you think somebody might already have your config file, then the best thing to do is to create a new
+filesystem with a new password, mount it, mount the old filesystem, and copy your data from the unencrypted view of the old filesytem to the unencrypted 
+view of the new filesystem.
+
+Recovery of Lost Password
+-----------
+Recovering from a lost password is possible only if you have printed and saved the
+unencrypted master key.
+
+If you run:
+
+cppcryptfsctl --printmasterkey PATH (path to encrypted filesystem dir or config file)
+
+It will print the unencrypted master key in human-readable form.  For example, you could print it and save it in a locked drawer.
+
+If you forget your password, you can run
+
+cppcryptfsctl --recover PATH 
+
+It will prompt for you to enter the master key, and then it will prompt for you to enter the new password and confirm the new password.
+
+This operation overrwrites the master key in the target config file.  It makes a backup of the config file before doing this. The backup is named by appending .bak to the name of the config file. If the .bak file already exists, it asks for you to delete the existing .bak file or move it out of the way.
+
+
+Recovery of Lost or Corrupted Config File
+-----------
+Recovery of a lost or corrupted config file is possible only if you have the unencrypted master key.
+
+cppcryptfsctl --printmasterkey PATH (path to encrypted filesystem dir or config file)
+
+This will print the unencrypted master key in human-readable form.  If you did this and saved the key, then you can use it to recover
+from a lost or corrupted config file.
+
+The procedure is to do this (assuming you have printed the master key and saved it before recovery was necessary):
+
+1. You will need to create a new filesystem, using the same parameters other than paths (e.g. data encryption method, filename encryption method, long
+filenames, etc.) that you used when you created the filesystem that you are trying to recover.  
+
+It doesn't matter what password you use.
+
+2. use cppcryptfsctl --recover PATH to put the master key from the old filesystem in that config file.
+
+This will replace the master key in that config file with the one you entered.  It will be encrypted with the new password you choose.
+
+3. Try mounting the old filesystem specifying the path to the new config file and see if works (make sure you can read data from it).
+
+4. If it works, then you can place the config file you recovered to in the root of your encrypted filesystem if you wish.
+
+The only catch here is that if you have a filesystem created with gocryptfs or cppcryptfs versions prior to 1.3 
+(released in April/May 2017), then you will have problems with HKDF and Raw64.  These are now defaults, and 
+there is no way to create a config file without them.
+
+So if you have an old filesystem you are recovering, and it's not working,  then try editing
+the config file you created to recover to and remove the lines that have 
+
+```
+        "HKDF",
+        "Raw64",
+```
+
+And see if that works.        
 
 
 File name and path length limits
@@ -499,12 +661,21 @@ Delete linux-3.0                1m28.749s       0m10.144s       1m24.677s
 
 ```
 
+The above benchmarks were run a long time ago.  The creator of gocryptfs has published similar benchmarks more recently comparing cppcryptfs to other cryptographic filesystems on Windows.  
+
+https://nuetzlich.net/gocryptfs/comparison/#performance-on-windows
+
+Some of the results are faster but most are slower than the above benchmarks.
+This could be explained by Windows Defender realtime protection being
+active during the tests.  All cryptographic filesystems tested
+seem to have been affected in the same way.
+
 Compatibility with gocryptfs
 ------
 
 cppcryptfs can mount all filesystems created by gocryptfs v0.7 and higher. Likewise, filesystems created by cppcryptfs with "long file names = off" can be mounted by gocryptfs v0.7 and higher. Filesystems with "long file names = on" can mounted by gocryptfs v0.9 and higher.
 
-The gocryptfs [compatability matrix](https://github.com/rfjakob/gocryptfs/wiki/Compatibility) provides more details. cppcryptfs *requires* the DirIV, EMENames and GCMIV128 feature flags. It *supports* LongNames and can create filesystems with the flag on and off.
+The gocryptfs [compatability matrix](https://github.com/rfjakob/gocryptfs/wiki/Compatibility) provides more details. cppcryptfs *requires* the DirIV, EMENames (if encrypted file names and not plaintext file names are used), and GCMIV128 feature flags. It *supports* LongNames and can create filesystems with the flag on and off.
 
 Note: cppcryptfs now keeps version number parity with gocryptfs to indicate its compatibility
 with gocryptfs.  cppcryptfs is now version 1.4 and should be able to mount all filesystems created with gocryptfs 1.4.

@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -35,17 +35,17 @@ THE SOFTWARE.
 
 class SivContext;
 
-void *get_crypt_context(int ivlen, int mode);
+typedef struct evp_cipher_ctx_st EVP_CIPHER_CTX;
 
-void free_crypt_context(void *context);
+shared_ptr<EVP_CIPHER_CTX> get_crypt_context(int ivlen, int mode);
 
 int encrypt(const unsigned char *plaintext, int plaintext_len, unsigned char *aad,
 	int aad_len, const unsigned char *key, const unsigned char *iv, 
-	unsigned char *ciphertext, unsigned char *tag, void *context);
+	unsigned char *ciphertext, unsigned char *tag, EVP_CIPHER_CTX* ctx);
 
 int decrypt(const unsigned char *ciphertext, int ciphertext_len, unsigned char *aad,
 	int aad_len, unsigned char *tag, const unsigned char *key, const unsigned char *iv, 
-	unsigned char *plaintext, void *context);
+	unsigned char *plaintext, EVP_CIPHER_CTX* ctx);
 
 int encrypt_siv(const unsigned char *plaintext, int plaintext_len, unsigned char *aad,
 	int aad_len, const unsigned char *iv,

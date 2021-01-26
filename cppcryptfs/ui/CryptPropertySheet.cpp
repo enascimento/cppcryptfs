@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -32,12 +32,17 @@ THE SOFTWARE.
 #include "stdafx.h"
 #include <Dbt.h>
 #include "cppcryptfs.h"
+#include "../libipc/server.h"
+#include "../libipc/certutil.h"
 #include "CryptPropertySheet.h"
 #include "CryptPropertyPage.h"
 #include "dokan/cryptdokan.h"
 #include "util/LockZeroBuffer.h"
 #include "util/util.h"
 #include "dokan/MountPointManager.h"
+#include "ui/uiutil.h"
+#include "../libcppcryptfs/util/KeyCache.h"
+#include "crypt/crypt.h"
 
 // CryptPropertySheet
 
@@ -58,11 +63,12 @@ CCryptPropertySheet::CCryptPropertySheet(LPCTSTR pszCaption, CWnd* pParentWnd, U
 	m_nMountPageIndex = 0;
 	m_bHideAfterInit = FALSE;
 	m_psh.dwFlags |= PSH_NOAPPLYNOW;
-	m_psh.dwFlags &= ~PSH_HASHELP;
+	m_psh.dwFlags &= ~PSH_HASHELP;	
 }
 
 CCryptPropertySheet::~CCryptPropertySheet()
 {
+	
 }
 
 BOOL CCryptPropertySheet::CanClose()
@@ -105,6 +111,7 @@ BEGIN_MESSAGE_MAP(CCryptPropertySheet, CPropertySheet)
 	ON_WM_DEVICECHANGE()
 //	ON_WM_QUERYENDSESSION()
 ON_WM_ENDSESSION()
+ON_WM_POWERBROADCAST()
 END_MESSAGE_MAP()
 
 
@@ -226,32 +233,45 @@ INT_PTR CCryptPropertySheet::DoModal()
 	
 }
 
-
 BOOL CCryptPropertySheet::OnCopyData(CWnd* pWnd, COPYDATASTRUCT* pCopyDataStruct)
 {
 	// TODO: Add your message handler code here and/or call default
 
-	if (pCopyDataStruct && pCopyDataStruct->dwData == CPPCRYPTFS_COPYDATA_CMDLINE && 
-		pCopyDataStruct->cbData >= sizeof(CopyDataCmdLine) &&
-		pCopyDataStruct->cbData <= CPPCRYPTFS_COPYDATA_CMDLINE_MAXLEN) {
+	if (pCopyDataStruct && 
+		pCopyDataStruct->dwData == CPPCRYPTFS_COPYDATA_PIPE &&
+		pCopyDataStruct->cbData == sizeof(HANDLE)) {
 
-		DWORD consolePid = ((CopyDataCmdLine*)pCopyDataStruct->lpData)->dwPid;
+		auto hPipe = *reinterpret_cast<HANDLE*>(pCopyDataStruct->lpData);
+
+		DWORD client_process_id = 0;
+
+		if (!GetNamedPipeClientProcessId(hPipe, &client_process_id)) {
+			return FALSE;
+		}
+
+		if (!ValidateNamedPipeConnection(client_process_id)) {
+			CloseHandle(hPipe);
+			return FALSE;
+		}
 
 		CCryptPropertyPage *page = (CCryptPropertyPage*)GetPage(m_nMountPageIndex);
 
 		if (page) {
-			// ensure that szCmdLine is null terminated by allocating extra WCHAR
-			LockZeroBuffer<BYTE> buf(pCopyDataStruct->cbData + sizeof(WCHAR));
-			if (!buf.IsLocked()) {
-				ConsoleErrMes(L"unable to lock command line buffer in target", consolePid);
+			
+			LockZeroBuffer<WCHAR> cmdLine(CMD_PIPE_MAX_ARGS_LEN, false);
+			if (!cmdLine.IsLocked()) {
+				MessageBox(L"unable to lock command line buffer", L"cppcryptfs", MB_ICONERROR | MB_OK);
 				return FALSE;
 			}
-			memcpy(buf.m_buf, pCopyDataStruct->lpData, pCopyDataStruct->cbData);
-			CopyDataCmdLine *pcd = (CopyDataCmdLine*)buf.m_buf;
-			page->ProcessCommandLine(consolePid, pcd->szCmdLine);
-			return TRUE;
+			if (auto args = ReadFromNamedPipe(hPipe, cmdLine.m_buf, cmdLine.m_len)) {
+				page->ProcessCommandLine(args, FALSE, hPipe);
+				return TRUE;
+			} else {
+				ConsoleErrMesPipe(L"unable to read command line", hPipe);
+				return FALSE;
+			}
 		} else {
-			ConsoleErrMes(L"unable to get mount page", consolePid);
+			ConsoleErrMesPipe(L"unable to get mount page", hPipe);
 			return FALSE;
 		}
 	} else {
@@ -278,7 +298,7 @@ BOOL CCryptPropertySheet::OnDeviceChange( UINT nEventType, DWORD_PTR dwData )
 
 		PDEV_BROADCAST_HDR pHdr = (PDEV_BROADCAST_HDR)dwData;
 
-		if (pHdr->dbch_devicetype == DBT_DEVTYP_VOLUME) {
+		if (pHdr->dbch_devicetype == DBT_DEVTYP_VOLUME) {			
 			PDEV_BROADCAST_VOLUME pVolHdr = (PDEV_BROADCAST_VOLUME)dwData;
 			if ((pVolHdr->dbcv_unitmask & theApp.m_mountedLetters) != pVolHdr->dbcv_unitmask) {
 				CCryptPropertyPage *page = (CCryptPropertyPage*)GetPage(m_nMountPageIndex);
@@ -296,8 +316,27 @@ void CCryptPropertySheet::OnEndSession(BOOL bEnding)
 {
 	CPropertySheet::OnEndSession(bEnding);
 
-	if (bEnding) {
+	if (bEnding) {		
+		KeyCache::GetInstance()->Disable();
 		unmount_all(false);
 		wait_for_all_unmounted();
 	}
+}
+
+
+UINT CCryptPropertySheet::OnPowerBroadcast(UINT nPowerEvent, LPARAM nEventData)
+{
+	if (nPowerEvent == PBT_APMSUSPEND) {
+#ifdef _DEBUG
+		OutputDebugStringA("disabling key cache on suspend\n");
+#endif
+		KeyCache::GetInstance()->Disable();
+	} else if (nPowerEvent == PBT_APMRESUMEAUTOMATIC || 
+			   nPowerEvent == PBT_APMRESUMESUSPEND) {
+#ifdef _DEBUG
+		OutputDebugStringA("enabling key cache on resume\n");
+#endif
+		KeyCache::GetInstance()->Enable();
+	}
+	return CPropertySheet::OnPowerBroadcast(nPowerEvent, nEventData);
 }

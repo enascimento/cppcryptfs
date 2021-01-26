@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -32,6 +32,8 @@ THE SOFTWARE.
 #include <vector>
 
 #include "util/LockZeroBuffer.h"
+#include "util/KeybufManager.h"
+#include "util/KeyCache.h"
 
 #define MAX_CONFIG_FILE_SIZE (16*1024*1024) // 16MB
 
@@ -47,6 +49,7 @@ public:
 	int m_P;
 
 	bool m_PlaintextNames;
+	KeybufManager m_keybuf_manager;
 private:
 	LockZeroBuffer<unsigned char> *m_pKeyBuf;
 	LockZeroBuffer<BYTE> *m_pGcmContentKey;
@@ -77,27 +80,35 @@ public:
 	wstring m_mountpoint;
 
 	const unsigned char *GetMasterKey() { return m_pKeyBuf ? m_pKeyBuf->m_buf : NULL; }
-	int GetMasterKeyLength() { return m_pKeyBuf ? m_pKeyBuf->m_len : 0; }
+	DWORD GetMasterKeyLength() { return m_pKeyBuf ? m_pKeyBuf->m_len : 0; }
 	const WCHAR *GetMountPoint() { return m_mountpoint.c_str(); }
 	const WCHAR *GetBaseDir() { return m_basedir.c_str(); }
-	bool InitGCMContentKey(const BYTE *key, bool hkdf);
+	bool InitGCMContentKey(const BYTE *key);
 
 	const BYTE *GetGcmContentKey() { return m_HKDF ? m_pGcmContentKey->m_buf : GetMasterKey(); };
 
 	CryptConfig();
 	bool read(wstring& mes, const WCHAR *config_file_path = NULL, bool reverse = false);
+	bool encrypt_key(const wchar_t* password, const BYTE *masterkey, string& base64encryptedmastekey, string& scryptSalt, wstring& error_mes);	
 	bool decrypt_key(LPCTSTR password);
 
-	bool create(const WCHAR *path, const WCHAR *specified_config_path, const WCHAR *password, bool eme, bool plaintext, bool longfilenames, 
-					bool siv, bool reverse, const WCHAR *volume_name, wstring& error_mes);
+	bool create(const WCHAR* path, const WCHAR* specified_config_path, const WCHAR* password, bool eme, bool plaintext, bool longfilenames,
+		bool siv, bool reverse, const WCHAR* volume_name, bool disablestreams, wstring& error_mes		
+	);
 
 	bool check_config(wstring& mes);
 
-	bool write_volume_name();
+	bool write_updated_config_file(const char *base64key = nullptr, const char *scryptSalt = nullptr);
 
 	bool init_serial(CryptContext *con);
 
+	DWORD m_fs_feature_disable_mask;
+
 	WCHAR get_base_drive_letter();
+
+	void CopyKeyParams(const CryptConfig& other) {
+		m_N = other.m_N; m_R = other.m_R; m_P = other.m_P; m_HKDF = other.m_HKDF;
+	}
 
 	// disallow copying
 	CryptConfig(CryptConfig const&) = delete;

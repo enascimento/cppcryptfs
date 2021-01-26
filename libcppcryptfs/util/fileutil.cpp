@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -143,6 +143,8 @@ read_dir_iv(const TCHAR *path, unsigned char *diriv, FILETIME& LastWriteTime)
 	HANDLE hfile = INVALID_HANDLE_VALUE;
 	DWORD nRead = 0;
 
+	bool caught_wstring = false;
+
 	try {
 		wstring path_str;
 
@@ -154,26 +156,36 @@ read_dir_iv(const TCHAR *path, unsigned char *diriv, FILETIME& LastWriteTime)
 
 		path_str.append(DIR_IV_NAME);
 
-		hfile = CreateFile(&path_str[0], GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+		hfile = ::CreateFile(&path_str[0], GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 
 		if (hfile == INVALID_HANDLE_VALUE) {
-			throw(-1);
+			auto lasterr =::GetLastError();
+			throw(L"\terror opening diriv file " + path_str + L" lasterr = " + to_wstring(lasterr));
 		}
 
-		if (!ReadFile(hfile, diriv, DIR_IV_LEN, &nRead, NULL)) {
-			throw(-1);
+		if (!::ReadFile(hfile, diriv, DIR_IV_LEN, &nRead, NULL)) {
+			auto lasterr = ::GetLastError();
+			throw(L"\terror reading diriv file " + path_str + L" lasterr = " + to_wstring(lasterr));
 		}
 
-		if (!GetFileTime(hfile, NULL, NULL, &LastWriteTime)) {
-			throw(-1);
+		if (!::GetFileTime(hfile, NULL, NULL, &LastWriteTime)) {
+			auto lasterr = ::GetLastError();
+			throw(L"\terror getting filetime of diriv file " + path_str + L" lasterr = " + to_wstring(lasterr));			
 		}
-	}
-	catch (...) {
+	} catch (const wstring& mes) {
+		DbgPrint(L"\tget_diriv: %s\n", mes.c_str());
 		nRead = 0;
+		caught_wstring = true;
+	} catch (...) {
+		nRead = 0;		
 	}
 
 	if (hfile != INVALID_HANDLE_VALUE)
-		CloseHandle(hfile);
+		::CloseHandle(hfile);
+
+	if (!caught_wstring && nRead != DIR_IV_LEN) {
+		DbgPrint(L"\tget_diriv read incorrect number of bytes from %s, read %u bytes instead of %u\n", path, nRead, DIR_IV_LEN);
+	}
 
 	return nRead == DIR_IV_LEN;
 }
@@ -194,17 +206,20 @@ get_dir_iv(CryptContext *con, const WCHAR *path, unsigned char *diriv)
 	try {
 
 		if (con && con->GetConfig()->m_reverse) {
-			throw(-1);
+			throw(wstring(L"\tcalled for reverse fs"));
 		}
 
 		if (!con->m_dir_iv_cache.lookup(path, diriv)) {
 			FILETIME LastWritten;
 			if (!read_dir_iv(path, diriv, LastWritten))
-				throw(-1);
+				throw(wstring(L"read_dir_iv failed for") + path);
 			if (!con->m_dir_iv_cache.store(path, diriv, LastWritten)) {
-				throw(-1);
+				throw(wstring(L"store_diriv failed for ") + path);
 			}
 		}
+	} catch (const wstring& mes) {
+		DbgPrint(L"\tget_diriv %s\n", mes.c_str());
+		bret = false;
 	} catch (...) {
 		bret = false;
 	}
@@ -298,6 +313,8 @@ find_files(CryptContext *con, const WCHAR *pt_path, const WCHAR *path, PCryptFil
 	bool reverse = con->GetConfig()->m_reverse;
 
 	bool plaintext_names = con->GetConfig()->m_PlaintextNames;
+
+	KeyDecryptor kdc(plaintext_names ? nullptr : &con->GetConfig()->m_keybuf_manager);
 
 	list<wstring> files; // used only if case-insensitive
 
@@ -682,10 +699,9 @@ create_dir_iv(CryptContext *con, LPCWSTR path)
 
 #endif // _WIN32
 
-
 #ifdef _WIN32
 bool
-is_empty_directory(LPCWSTR path, BOOL bMustReallyBeEmpty)
+is_empty_directory(LPCWSTR path, BOOL bMustReallyBeEmpty, CryptContext *con)
 {
 	bool bret = true;
 
@@ -718,10 +734,23 @@ is_empty_directory(LPCWSTR path, BOOL bMustReallyBeEmpty)
 			throw((int)error);
 		}
 
+		vector<wstring> dummy;
+
+		auto& deletable_files = con ? con->GetDeletableFiles() : dummy;
+
+		auto can_be_deleted = [](const vector<wstring>& deletable_files, LPCWSTR fname) -> bool {
+			auto count = deletable_files.size();
+			for (size_t i = 0; i < count; i++) {
+				if (lstrcmpi(deletable_files[i].c_str(), fname) == 0)
+					return true;
+			}
+			return false;
+		};
+
 		while (hFind != INVALID_HANDLE_VALUE) {
 			if (wcscmp(findData.cFileName, L"..") != 0 &&
 				wcscmp(findData.cFileName, L".") != 0 &&
-				(bMustReallyBeEmpty || wcscmp(findData.cFileName, DIR_IV_NAME) != 0)) {
+				(bMustReallyBeEmpty || !can_be_deleted(deletable_files, findData.cFileName))) {
 				throw((int)ERROR_DIR_NOT_EMPTY);
 			}
 			if (!FindNextFile(hFind, &findData)) {
@@ -752,9 +781,9 @@ is_empty_directory(LPCWSTR path, BOOL bMustReallyBeEmpty)
 }
 
 bool
-can_delete_directory(LPCWSTR path, BOOL bMustReallyBeEmpty)
+can_delete_directory(LPCWSTR path, BOOL bMustReallyBeEmpty, CryptContext *con)
 {
-	return is_empty_directory(path, bMustReallyBeEmpty);
+	return is_empty_directory(path, bMustReallyBeEmpty, con);
 }
 
 bool can_delete_file(LPCWSTR path)
@@ -769,33 +798,40 @@ delete_directory(CryptContext *con, LPCWSTR path)
 
 	try {
 
-		if (con->GetConfig()->DirIV()) {
+		wstring path_with_slash = path;	
 
-			wstring diriv_file = path;
+		if (path_with_slash[path_with_slash.size() - 1] != '\\')
+			path_with_slash.push_back('\\');
 
-			if (diriv_file[diriv_file.size() - 1] != '\\')
-				diriv_file.push_back('\\');
+		vector<wstring> dummy;
 
-			diriv_file.append(DIR_IV_NAME);
+		auto& files_to_delete = con ? con->GetDeletableFiles() : dummy;
 
-			DWORD attr = GetFileAttributes(&diriv_file[0]);
+		wstring file_to_delete;
+
+		for (size_t i = 0; i < files_to_delete.size(); i++) {
+
+			file_to_delete = path_with_slash + files_to_delete[i];
+
+			DWORD attr = GetFileAttributes(file_to_delete.c_str());
 
 			if (attr != INVALID_FILE_ATTRIBUTES) {
 
 				if (attr & FILE_ATTRIBUTE_READONLY) {
 					attr &= ~FILE_ATTRIBUTE_READONLY;
-					if (!SetFileAttributes(&diriv_file[0], attr)) {
+					if (!SetFileAttributes(file_to_delete.c_str(), attr)) {
 						throw((int)GetLastError());
 					}
 				}
 
-				con->m_dir_iv_cache.remove(path);
-
-				if (!DeleteFile(&diriv_file[0])) {
+				if (!DeleteFile(file_to_delete.c_str())) {
 					throw((int)GetLastError());
 				}
 			}
-			
+		}
+
+		if (con->GetConfig()->DirIV()) {
+			con->m_dir_iv_cache.remove(path);
 		}
 
 		if (!RemoveDirectory(path)) {
@@ -1010,7 +1046,7 @@ bool is_suitable_mountpoint(LPCWSTR path)
 		0, NULL, NULL,
 		NULL, fsnamebuf, sizeof(fsnamebuf) / sizeof(fsnamebuf[0]) - 1)) {
 		DWORD error = GetLastError();
-		DbgPrint(L"get fs name error = %u\n", error);
+		//DbgPrint(L"get fs name error = %u\n", error);
 		return false;
 	}
 

@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -73,3 +73,5 @@ THE SOFTWARE.
 #define READONLY_FLAG 1
 #define REVERSE_FLAG  2
 #define SAVE_PASSWORD_FLAG 4
+
+#define MAX_IO_BUFFER_KB 4096

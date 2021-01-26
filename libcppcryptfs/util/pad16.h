@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -40,6 +40,26 @@ Bellow is the comment header from pad16.go
 
 #include <windows.h>
 
-BYTE* pad16(const BYTE* orig, int len, int& newLen);
+template <size_t L>
+bool pad16(const BYTE* orig, int len, int& newLen, TempBuffer<BYTE, L>& padded) {
+	int oldLen = len;
+	if (oldLen == 0) {
+		return NULL;
+	}
+	int padLen = 16 - oldLen % 16;
+	if (padLen == 0) {
+		padLen = 16;
+	}
+	newLen = oldLen + padLen;
+	BYTE* p = padded.get(newLen);
+	if (!p)
+		return false;
+	memcpy(p, orig, len);
+	BYTE padByte = (BYTE)(padLen);
+	for (int i = oldLen; i < newLen; i++) {
+		p[i] = padByte;
+	}
+	return true;
+}
 
 int unPad16(BYTE *padded, int len);

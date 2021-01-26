@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -28,6 +28,7 @@ THE SOFTWARE.
 
 #include "stdafx.h"
 #include "crypt/crypt.h"
+#include "util/fileutil.h"
 #include "cryptcontext.h"
 
 static RandomBytes random_bytes;
@@ -37,7 +38,7 @@ static RandomBytes random_bytes;
 bool CryptContext::InitEme(const BYTE *key, bool hkdf)
 {
 
-	return m_eme.init(key, hkdf);
+	return m_eme.init(key, hkdf, m_config);
 
 }
 
@@ -50,6 +51,7 @@ CryptContext::CryptContext()
 
 	m_recycle_bin = false;
 	m_read_only = false;
+	m_delete_spurrious_files = false;
 
 	m_cache_ttl = 1;
 
@@ -66,6 +68,35 @@ CryptContext::CryptContext()
 
 	m_case_cache.m_con = this;
 
+	m_encryptKeysInMemory = false;
+	m_cacheKeysInMemory = false;
+}
+
+static void get_deletable_files(CryptContext *con, vector<wstring>& files)
+{
+
+	files.clear();
+
+	assert(con);
+
+	if (!con)
+		return;
+
+	if (con->GetConfig()->DirIV()) {
+		files.push_back(DIR_IV_NAME);
+	}
+
+	if (con->m_delete_spurrious_files && !con->GetConfig()->m_PlaintextNames 
+			&& !con->GetConfig()->m_reverse) {
+		files.push_back(L"desktop.ini");
+	}
+}
+
+bool CryptContext::FinalInitBeforeMounting(bool use_key_cache)
+{
+	get_deletable_files(this, m_deletable_files);
+
+	return m_config->m_keybuf_manager.Finalize(use_key_cache);
 }
 
 
@@ -82,6 +113,8 @@ CryptContext::~CryptContext()
 void CryptContext::GetFsInfo(FsInfo & info)
 {
 	
+	info.encryptKeysInMemory = this->m_encryptKeysInMemory;
+	info.cacheKeysInMemory = this->m_cacheKeysInMemory;
 	info.cacheTTL = m_cache_ttl;
 	info.caseInsensitive = IsCaseInsensitive();
 	info.configPath = GetConfig()->m_configPath;

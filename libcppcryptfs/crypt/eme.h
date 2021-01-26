@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -30,6 +30,8 @@ THE SOFTWARE.
 
 #include <windows.h>
 
+#include <util/util.h>
+
 #include "cryptdefs.h"
 
 #include "openssl/aes.h"
@@ -39,7 +41,12 @@ THE SOFTWARE.
 #include "util/LockZeroBuffer.h"
 
 
+class CryptConfig;
 
+// we do EME only on individual path components (file/directory names)
+// a stack buffer of 384 bytes should handle all cases without
+// dynamic allocation being necessary
+typedef TempBuffer<BYTE, 384> EmeBuffer_t;
 
 class EmeCryptContext {
 public:
@@ -60,14 +67,14 @@ public:
 
 	virtual ~EmeCryptContext();
 
-	void tabulateL(int m);
+	void tabulateL(int m, CryptConfig *pConfig);
 
 
-	bool init(const BYTE *key, bool hkdf);
+	bool init(const BYTE *key, bool hkdf, CryptConfig *pConfig);
 	
 };
 
 
-BYTE* EmeTransform(const EmeCryptContext *eme_context, 
-	const BYTE *T, const BYTE *P, int len, bool direction);
+bool EmeTransform(const EmeCryptContext *eme_context, 
+	const BYTE *T, const BYTE *P, int len, bool direction, EmeBuffer_t& buffer);
 

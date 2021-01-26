@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -33,7 +33,7 @@ THE SOFTWARE.
 
 using namespace std;
 
-#define CASE_CACHE_ENTRIES 100
+#define CASE_CACHE_ENTRIES 100  // this is directories, not files
 
 class CaseCacheNode {
 

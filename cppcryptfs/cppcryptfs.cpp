@@ -2,7 +2,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -32,7 +32,9 @@ THE SOFTWARE.
 //
 
 #include "stdafx.h"
+#include <iostream>
 #include "cppcryptfs.h"
+#include "dokan/cryptdokan.h"
 #include "crypt/cryptdefs.h"
 #include "ui/CryptPropertySheet.h"
 #include "ui/MountPropertyPage.h"
@@ -47,6 +49,8 @@ THE SOFTWARE.
 #include "util/util.h"
 #include "crypt/crypt.h"
 #include "ui/uiutil.h"
+#include "../libipc/server.h"
+#include "../libipc/client.h"
 
 
 #ifdef _DEBUG
@@ -73,13 +77,10 @@ CcppcryptfsApp::CcppcryptfsApp()
 
 	m_mountedLetters = 0;
 
-	// get an OpenSSL EVP context to force detection of AES-NI instructions
+	// get a shared ptr to an OpenSSL EVP context to force detection of AES-NI instructions
 	// so we can use AES-NI even if EVP is never used
 
-	void *context = get_crypt_context(BLOCK_IV_LEN, AES_MODE_GCM);
-
-	if (context)
-		free_crypt_context(context);
+	auto context = get_crypt_context(BLOCK_IV_LEN, AES_MODE_GCM);	
 }
 
 
@@ -88,9 +89,31 @@ CcppcryptfsApp::CcppcryptfsApp()
 CcppcryptfsApp theApp;
 
 
+
+
+static void NamedPipeServerCallback(void* ctx, HANDLE hPipe) 
+{
+	auto pApp = reinterpret_cast<CcppcryptfsApp*>(ctx);
+
+	pApp->SendCmdArgsToSelf(hPipe);
+}
+
+static bool StartNamedPipeServer()
+{
+	static NamedPipeServerContext ctx;
+
+	ctx.context = &theApp;
+	ctx.callback = NamedPipeServerCallback;
+
+	auto hThread = CreateThread(NULL, 0, NamedPipeServerThreadProc, &ctx, 0, NULL);
+
+	if (hThread != NULL)
+		CloseHandle(hThread);
+
+	return hThread != NULL;
+}
+
 // CcppcryptfsApp initialization
-
-
 
 
 BOOL CcppcryptfsApp::InitInstance()
@@ -117,7 +140,46 @@ BOOL CcppcryptfsApp::InitInstance()
 
 		if (hWnd) {
 			if (have_args()) {
-				SendArgsToRunningInstance(hWnd);
+
+				bool have_console = OpenConsole(0); 
+
+				wstring err_mes;
+				wstring result;
+
+				if (SendArgsToRunningInstance(GetCommandLine(), result, err_mes)) {
+					if (err_mes.length() > 0)
+						err_mes += L"\n";
+					else
+						err_mes = L"cppcryptfsctl: Unable to send command. Is cppcryptfs really already running?\n";
+				} else {
+					if (result.length() >= CMD_PIPE_RESPONSE_LENGTH) {
+						if (wcsncmp(result.c_str(), CMD_PIPE_SUCCESS_STR, CMD_PIPE_RESPONSE_LENGTH) == 0) {
+							wstring mes = result.c_str() + CMD_PIPE_RESPONSE_LENGTH;
+							if (mes.length() > 0) {
+								if (have_console)
+									wcout << mes << endl;
+								else
+									::MessageBox(NULL, mes.c_str(), L"cppcryptfs", MB_OK);
+							}
+						} else {
+							err_mes = wstring(result.c_str() + CMD_PIPE_RESPONSE_LENGTH);
+						}
+					} else {
+						err_mes = L"cppcryptfs: got a mal-formed response from running instance of cppcryptfs\n";
+					}
+				}
+
+				if (err_mes.length() > 0) {
+					if (have_console) {
+						wcerr << err_mes;
+					} else {
+						::MessageBox(NULL, err_mes.c_str(), L"cppcryptfs", MB_ICONERROR | MB_OK);
+					}
+				}
+
+				if (have_console)
+					CloseConsole();
+				
 			} else { // if no args, then restore window of running instance
 				ShowWindow(hWnd, SW_SHOWNORMAL);
 			}
@@ -138,8 +200,9 @@ BOOL CcppcryptfsApp::InitInstance()
 		if (!dokVerCheck) {
 			return FALSE;
 		}
-	}
+	}	
 
+	StartNamedPipeServer();
 
 	// InitCommonControlsEx() is required on Windows XP if an application
 	// manifest specifies use of ComCtl32.dll version 6 or later to enable
@@ -213,6 +276,8 @@ BOOL CcppcryptfsApp::InitInstance()
 
 	CMenuTrayIcon TI(L"cppcryptfs", hIcon, IDR_PopUps, ID_IDR_SHOWCPPCRYPTFS);
 
+	crypt_at_start();
+
 	INT_PTR nResponse = dlg.DoModal();
 	if (nResponse == IDOK)
 	{
@@ -234,12 +299,15 @@ BOOL CcppcryptfsApp::InitInstance()
 	if (pShellManager != NULL)
 	{
 		delete pShellManager;
-	}
+	}	
 
 	// Upon app closing:
 	if (hAppMutex) {
 		ReleaseMutex(hAppMutex); // Explicitly release mutex
 		CloseHandle(hAppMutex); // close handle before terminating
+
+		// any at app exit cleanup of the encryted filesystems occurs here
+		crypt_at_exit();		
 	}
 
 	// Since the dialog has been closed, return FALSE so that we exit the
@@ -276,44 +344,49 @@ BOOL CcppcryptfsApp::WriteProfileBinary(LPCWSTR section, LPCWSTR entry, LPBYTE p
 }
 
 
-void CcppcryptfsApp::SendArgsToRunningInstance(HWND hWnd)
+void CcppcryptfsApp::SendCmdArgsToSelf(HANDLE hPipe)
 {
+
+	HWND hWnd = ::FindWindow(L"#32770", L"cppcryptfs");
+	if (!hWnd)
+		return;
+
+	DWORD win_proc_id = 0;
+
+	GetWindowThreadProcessId(hWnd, &win_proc_id);
+
+	if (win_proc_id != ::GetCurrentProcessId())
+		return;
+
 	static_assert(sizeof(WCHAR) == sizeof(wchar_t), "sizeof(WCHAR) != sizeof(wchar_t).");
 	COPYDATASTRUCT cd;
 	memset(&cd, 0, sizeof(cd));
-	cd.dwData = CPPCRYPTFS_COPYDATA_CMDLINE;
-	LPCWSTR cmdLine = GetCommandLineW();
-	size_t cmdLineLen = wcslen(cmdLine);
-	size_t dataLen = sizeof(CopyDataCmdLine) + cmdLineLen * sizeof(WCHAR); // WCHAR in CmdLineCopyData accounts for null terminator
-	if (dataLen <= CPPCRYPTFS_COPYDATA_CMDLINE_MAXLEN) {
-		cd.cbData = (DWORD)dataLen;
-		LockZeroBuffer<BYTE> buf(cd.cbData);
-		if (buf.IsLocked()) {
-			CopyDataCmdLine *pcd = (CopyDataCmdLine*)buf.m_buf;
-			pcd->dwPid = getppid();
-			cd.lpData = (PVOID)pcd;
-			if (wcscpy_s(pcd->szCmdLine, cmdLineLen + 1, cmdLine) == 0) {
-				SetLastError(0);
-				SendMessageW(hWnd, WM_COPYDATA, NULL, (LPARAM)&cd);
-				DWORD dwErr = GetLastError();
-				if (dwErr) {
-					if (dwErr == ERROR_ACCESS_DENIED) {
-						ConsoleErrMes(L"SendMessage() returned error \"access denied\".\n\nPerhaps there is"
-							" already an instance of cppcryptfs running with administrator\nprivileges, but"
-							" you invoked this instance of cppcryptfs from a command prompt\nthat is not running"
-							" with administrator privileges.\n\nIf this is the case, then you should start a"
-							" CMD.exe window using\n\"Run as administrator\" and invoke cppcryptfs from within it.");
-					} else {
-						WCHAR buf[80];
-						_snwprintf_s(buf, _TRUNCATE, L"SendMessage() returned error code %u", dwErr);
-						ConsoleErrMes(buf);
-					}
-				}
-			}
+	cd.dwData = CPPCRYPTFS_COPYDATA_PIPE;
+
+	std::vector<HANDLE> pipe_v;
+
+	pipe_v.push_back(hPipe);
+	
+	cd.cbData =static_cast<DWORD>(sizeof(hPipe));
+	
+	cd.lpData = static_cast<PVOID>(&pipe_v[0]);
+	
+	SetLastError(0);
+	SendMessageW(hWnd, WM_COPYDATA, NULL, (LPARAM)&cd);
+	DWORD dwErr = GetLastError();
+	if (dwErr) {
+		if (dwErr == ERROR_ACCESS_DENIED) {
+			ConsoleErrMesPipe(L"SendMessage() returned error \"access denied\".\n\nPerhaps there is"
+				" already an instance of cppcryptfs running with administrator\nprivileges, but"
+				" you invoked this instance of cppcryptfs from a command prompt\nthat is not running"
+				" with administrator privileges.\n\nIf this is the case, then you should start a"
+				" CMD.exe window using\n\"Run as administrator\" and invoke cppcryptfs from within it.", hPipe);
 		} else {
-			ConsoleErrMes(L"unable to lock command line buffer in source");
+			WCHAR buf[80];
+			_snwprintf_s(buf, _TRUNCATE, L"SendMessage() returned error code %u", dwErr);
+			ConsoleErrMesPipe(buf, hPipe);
 		}
-	} else {
-		ConsoleErrMes(L"command line too long");
 	}
+				
 }
+

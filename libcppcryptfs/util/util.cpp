@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -120,20 +120,19 @@ unicode_to_utf8(const WCHAR *unicode_str, string& storage)
 	if (len == 0)
 		return NULL;
 
+	TempBuffer<char, 4096> utf8(len);
+
 	// len includes space for null char
-	char *p_utf8 = new char[len];
+	char *p_utf8 = utf8.get();
 
 	if (!p_utf8)
 		return NULL;
 
-	if (WideCharToMultiByte(CP_UTF8, 0, unicode_str, -1, p_utf8, len, NULL, NULL) == 0) {
-		delete[] p_utf8;
+	if (WideCharToMultiByte(CP_UTF8, 0, unicode_str, -1, p_utf8, len, NULL, NULL) == 0) {		
 		return NULL;
 	}
 
 	storage = p_utf8;
-
-	delete[] p_utf8;
 
 	return &storage[0];
 }
@@ -148,19 +147,17 @@ utf8_to_unicode(const char *utf8_str, wstring& storage)
 		return NULL;
 
 	// len includes space for null char
-	WCHAR *p_unicode = new WCHAR[len];
+	TempBuffer<WCHAR, 2048> unicode(len);
+	WCHAR* p_unicode = unicode.get();
 
 	if (!p_unicode)
 		return NULL;
 
-	if (MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, p_unicode, len) == 0) {
-		delete[] p_unicode;
+	if (MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, p_unicode, len) == 0) {		
 		return NULL;
 	}
 
-	storage = p_unicode;
-
-	delete[] p_unicode;
+	storage = p_unicode;	
 
 	return &storage[0];
 }
@@ -312,9 +309,9 @@ base64_encode(const BYTE *data, DWORD datalen, string& storage, bool urlTransfor
 
 	BOOL bResult = FALSE;
 
-	try {
+	TempBuffer<char, 4096> base64(base64len + 1);
 
-		base64str = new char[base64len + 1];
+	if (base64str = base64.get()) {		
 
 		// ATL Base64Encode() is supposedly way faster than CryptBinaryToString()
 	
@@ -324,7 +321,7 @@ base64_encode(const BYTE *data, DWORD datalen, string& storage, bool urlTransfor
 		if (bResult)
 			base64str[base64len] = '\0';
 
-	} catch (...) {
+	} else {
 		bResult = FALSE;
 	}
 	if (bResult) {
@@ -340,13 +337,11 @@ base64_encode(const BYTE *data, DWORD datalen, string& storage, bool urlTransfor
 			}
 		}
 		storage = base64str;
-		delete[] base64str;
+		
 		if (!padding)
 			remove_base64_padding(storage);
 		return storage.c_str();
-	} else {
-		if (base64str)
-			delete[] base64str;
+	} else {		
 		return NULL;
 	}
 }
@@ -397,7 +392,7 @@ bool read_password(WCHAR *pwbuf, int pwbuflen, const WCHAR *prompt)
 	if (!hStdin)
 		return false;
 
-	wcout << (prompt ? prompt : L"Password: ");
+	wcerr << (prompt ? prompt : L"Password: ");
 
 	DWORD old_mode = 0;
 	if (!GetConsoleMode(hStdin, &old_mode))
@@ -415,7 +410,7 @@ bool read_password(WCHAR *pwbuf, int pwbuflen, const WCHAR *prompt)
 
 	SetConsoleMode(hStdin, old_mode);
 
-	wcout << L"\n";
+	wcerr << L"\n";
 
 	return true;
 }
@@ -455,11 +450,11 @@ get_random_bytes(CryptContext *con, unsigned char *buf, DWORD len)
 
 
 DWORD 
-getppid()
+getppid(DWORD dwPid)
 {
 	HANDLE hSnapshot;
 	PROCESSENTRY32 pe32;
-	DWORD ppid = 0, pid = GetCurrentProcessId();
+	DWORD ppid = 0, pid = dwPid;
 
 	hSnapshot = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
 	__try{
@@ -538,126 +533,37 @@ CloseConsole()
 }
 
 void 
-ConsoleErrMes(LPCWSTR err, DWORD pid)
+ConsoleErrMesPipe(LPCWSTR err, HANDLE hPipe)
 {
-	if (OpenConsole(pid)) {
-		fwprintf(stderr, L"cppcryptfs: %s\n", err);
-		CloseConsole();
-	}
+	// Send a message to the pipe client. 
+
+	wstring mes = wstring(L"cppcryptfs: ") + err;
+
+	auto cbToWrite = (mes.length() + 1) * sizeof(WCHAR);
+
+	DWORD cbWritten = 0;
+	BOOL fSuccess = WriteFile(
+		hPipe,                  // pipe handle 
+		mes.c_str(),                   // message 
+		static_cast<DWORD>(cbToWrite),              // message length 
+		&cbWritten,             // bytes written 
+		NULL);                  // not overlapped 
+
+	CloseHandle(hPipe);
 }
-
-
-bool 
-GetProductVersionInfo(wstring& strProductName, wstring& strProductVersion,
-	wstring& strLegalCopyright, HMODULE hMod)
-{
-
-	TCHAR fullPath[MAX_PATH+1];
-	*fullPath = L'\0';
-	if (!GetModuleFileName(hMod, fullPath, MAX_PATH)) {
-		return false;
-	}
-	DWORD dummy = 0;
-	DWORD vSize = GetFileVersionInfoSize(fullPath, &dummy);
-	if (vSize < 1) {
-		return false;
-	}
-
-	void *pVersionResource = NULL;
-
-	pVersionResource = malloc(vSize);
-
-	if (pVersionResource == NULL)
-	{
-		return false;
-	}
-
-	if (!GetFileVersionInfo(fullPath, NULL, vSize, pVersionResource)) {
-		free(pVersionResource);
-		return false;
-	}
-
-	// get the name and version strings
-	LPVOID pvProductName = NULL;
-	unsigned int iProductNameLen = 0;
-	LPVOID pvProductVersion = NULL;
-	unsigned int iProductVersionLen = 0;
-	LPVOID pvLegalCopyright = NULL;
-	unsigned int iLegalCopyrightLen = 0;
-
-	struct LANGANDCODEPAGE {
-		WORD wLanguage;
-		WORD wCodePage;
-	} *lpTranslate;
-
-	// Read the list of languages and code pages.
-	unsigned int cbTranslate;
-	if (!VerQueryValue(pVersionResource,
-		TEXT("\\VarFileInfo\\Translation"),
-		(LPVOID*)&lpTranslate,
-		&cbTranslate)) {
-
-		return false;
-	}
-
-	if (cbTranslate/sizeof(struct LANGANDCODEPAGE) < 1) {
-		return false;
-	}
-
-	wstring lang;
-
-	WCHAR buf[16];
-
-	// use the first language/codepage;
-
-	wsprintf(buf, L"%04x%04x", lpTranslate->wLanguage, lpTranslate->wCodePage);
-
-	lang = buf;
-
-	// replace "040904e4" with the language ID of your resources
-	if (!VerQueryValue(pVersionResource, (L"\\StringFileInfo\\" + lang + L"\\ProductName").c_str(), &pvProductName, &iProductNameLen) ||
-		!VerQueryValue(pVersionResource, (L"\\StringFileInfo\\" + lang + L"\\ProductVersion").c_str(), &pvProductVersion, &iProductVersionLen) ||
-		!VerQueryValue(pVersionResource, (L"\\StringFileInfo\\" + lang + L"\\LegalCopyright").c_str(), &pvLegalCopyright, &iLegalCopyrightLen))
-	{
-		free(pVersionResource);
-		return false;
-	}
-
-	if (iProductNameLen < 1 || iProductVersionLen < 1 || iLegalCopyrightLen < 1) {
-		free(pVersionResource);
-		return false;
-	}
-
-	strProductName = (LPCTSTR)pvProductName;
-	strProductVersion = (LPCTSTR)pvProductVersion;
-	strLegalCopyright = (LPCTSTR)pvLegalCopyright;
-
-	free(pVersionResource);
-
-	return true;
-}
-
 
 bool touppercase(LPCWSTR in, wstring& out)
 {
-	WCHAR sbuf[MAX_PATH]; // if longer then use heap
-	WCHAR *hbuf = NULL;
+
 	WCHAR *buf;
+
+	TempBuffer<WCHAR, 2048> tmp(wcslen(in) + 1);
 
 	bool bRet = true;
 
-	try {
+	if (buf = tmp.get()) {
 
-		size_t len = wcslen(in);
-
-		if (len < sizeof(sbuf) / sizeof(sbuf[0])) {
-			buf = sbuf;
-		} else {
-
-			hbuf = new WCHAR[len + 1];
-
-			buf = hbuf;
-		}
+		size_t len = wcslen(in);		
 
 		wcscpy_s(buf, len+1, in);
 
@@ -665,12 +571,9 @@ bool touppercase(LPCWSTR in, wstring& out)
 
 		out = buf;
 
-	} catch (...) {
+	} else {
 		bRet = false;
-	}
-
-	if (hbuf)
-		delete[] hbuf;
+	}	
 
 	return bRet;
 }
@@ -763,54 +666,6 @@ BOOL GetPathHash(LPCWSTR path, wstring& hashstr)
 	return TRUE;
 }
 
-wstring GetWindowsErrorString(DWORD dwLastErr)
-{
-	wstring mes;
-
-	if (dwLastErr == 0) {
-		mes += L"unknown windows error 0";
-		return mes;
-	}
-
-	LPTSTR errorText = NULL;
-
-	if (!::FormatMessageW(
-		// use system message tables to retrieve error text
-		FORMAT_MESSAGE_FROM_SYSTEM
-		// allocate buffer on local heap for error text
-		| FORMAT_MESSAGE_ALLOCATE_BUFFER
-		// Important! will fail otherwise, since we're not 
-		// (and CANNOT) pass insertion parameters
-		| FORMAT_MESSAGE_IGNORE_INSERTS,
-		NULL,    // unused with FORMAT_MESSAGE_FROM_SYSTEM
-		dwLastErr,
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(LPTSTR)&errorText,  // output 
-		0, // minimum size for output buffer
-		NULL)) {   // arguments - see note 
-
-		mes += L"unable to get message for error " + to_wstring(dwLastErr);
-
-		if (errorText) {
-			LocalFree(errorText);
-		}
-
-		return mes;
-	} 
-
-	if (errorText) {
-		// ... do something with the string `errorText` - log it, display it to the user, etc.
-		mes += errorText;
-		// release memory allocated by FormatMessage()
-		LocalFree(errorText);
-		errorText = NULL;
-	} else {
-		mes += L"got null message for error " + to_wstring(dwLastErr);
-	}
-
-	return mes;
-}
-
 void SetOverlapped(LPOVERLAPPED pOv, LONGLONG offset)
 {
 	LARGE_INTEGER l;
@@ -838,3 +693,93 @@ void IncOverlapped(LPOVERLAPPED pOv, DWORD increment)
 	pOv->OffsetHigh = l.HighPart;
 }
 
+const wchar_t* get_command_line_usage()
+{
+	return
+
+LR"(Usage: cppcryptfs/cppcryptfsctl [OPTIONS]
+
+Mounting:
+  -m, --mount=PATH         mount filesystem located at PATH
+  -d, --drive=D            mount to drive letter D or empty dir DIR
+  -p, --password=PASS      use password PASS
+  -P, --saved-password     use saved password
+  -r, --readonly           mount read-only
+  -c, --config=PATH        path to config file for init/mount
+  -s, --reverse            init/mount reverse filesystem (implies siv for init)
+
+Unmounting:
+  -u, --unmount=D          unmount drive letter D or dir DIR
+  -u, --unmount=all        unmount all drives
+
+Misc:
+  -t, --tray               hide in system tray
+  -x, --exit               exit if no drives mounted
+  -l, --list               list available and mounted drive letters (with paths)
+  -ld:\p, --list=d:\p      list plaintext and encrypted filenames
+  -C, --csv                file list is comma-delimited
+  -D, --dir                file list dirs first and w/ trailing \"\\\"
+  -i, --info=D             show information about mounted filesystem
+  -v, --version            print version (use --init -v for cppcryptfsctl ver)
+  -h, --help               display this help message
+
+Initializing (cppcryptfsctl only):
+  -I, --init=PATH          Initialize encrypted filesystem located at PATH
+  -V, --volumename=NAME    specify volume name for filesystem
+  -T, --plaintext          use plaintext filenames (default is AES256-EME)
+  -S, --siv                use AES256-SIV for data encryption (default is GCM)
+  -L, --longnames [0|1]    enable/disable LFNs. defaults to enabled (1)
+  -b, --streams   [0|1]    enable/disable streams. defaults to enabled (1)
+
+Recovery/Maintenance (cppcryptfsctl only):
+  --changepassword=PATH	   Change password used to protect master key
+  --printmasterkey=PATH    Print master key in human-readable format
+  --recover=PATH           Prompt for master key and new password to recover
+)";
+	// --changepassword short form is 1
+}
+
+
+static BOOL s_DebugMode = FALSE;
+static BOOL s_UseStdErr = FALSE;
+static BOOL s_UseLogFile = FALSE;
+
+static FILE* s_DebugLogFile = NULL;
+
+void SetDbgVars(BOOL DebugMode, BOOL UseStdErr, BOOL UseLogFile, FILE* logfile)
+{
+	s_DebugMode = DebugMode;
+	s_UseStdErr = UseStdErr;
+	s_UseLogFile = UseLogFile;
+	s_DebugLogFile = logfile;
+}
+
+void DbgPrint(LPCWSTR format, ...) {
+	if (s_DebugMode) {
+		const WCHAR* outputString;
+		WCHAR* buffer = NULL;
+		size_t length;
+		va_list argp;
+
+		va_start(argp, format);
+		length = _vscwprintf(format, argp) + 1;
+		buffer = (WCHAR*)_malloca(length * sizeof(WCHAR));
+		if (buffer) {
+			vswprintf_s(buffer, length, format, argp);
+			outputString = buffer;
+		} else {
+			outputString = format;
+		}
+		if (s_UseStdErr) {
+			fputws(outputString, stderr);
+		} else if (s_UseLogFile && s_DebugLogFile) {
+			fputws(outputString, s_DebugLogFile);
+			fflush(s_DebugLogFile);
+		} else {
+			OutputDebugStringW(outputString);
+		}
+		if (buffer)
+			_freea(buffer);
+		va_end(argp);
+	}
+}

@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -72,7 +72,7 @@ bool
 derive_path_iv(CryptContext *con, const WCHAR *path, unsigned char *iv, const char *type)
 {
 
-	DbgPrint(L"derive_path_iv path = %s, type = %S\n", path, type);
+	//DbgPrint(L"derive_path_iv path = %s, type = %S\n", path, type);
 
 	wstring wpath;
 
@@ -102,12 +102,16 @@ derive_path_iv(CryptContext *con, const WCHAR *path, unsigned char *iv, const ch
 
 	bool bRet = true;
 
+	TempBuffer<BYTE, 4096> buffer;
+
 	BYTE *pbuf = NULL;
 
 	try {
 		int typelen = (int)strlen(type);
 		int bufsize = (int)(utf8path.length() + 1 + typelen);
-		pbuf = new BYTE[bufsize];
+		pbuf = buffer.get(bufsize);
+		if (!pbuf)
+			throw(-1);
 		memcpy(pbuf, &utf8path[0], utf8path.length() + 1);
 		memcpy(pbuf + utf8path.length() + 1, type, typelen);
 		BYTE hash[SHA256_LEN];
@@ -119,9 +123,6 @@ derive_path_iv(CryptContext *con, const WCHAR *path, unsigned char *iv, const ch
 	} catch (...) {
 		bRet = false;
 	}
-
-	if (pbuf)
-		delete[] pbuf;
 
 	return bRet;
 }
@@ -144,47 +145,63 @@ encrypt_filename(const CryptContext *con, const unsigned char *dir_iv, const WCH
 
 	bool have_stream = get_file_stream(filename, &file_without_stream, &stream);
 
-	if (!unicode_to_utf8(file_without_stream.c_str(), utf8_str))
+	if (!unicode_to_utf8(file_without_stream.c_str(), utf8_str)) {
+		DbgPrint(L"\tencrypt_filename: unicode_to_utf8 failed : %s\n", file_without_stream.c_str());
 		return NULL;
+	}
 	
 	if (con->GetConfig()->m_EMENames) {
+	
+		TempBuffer<BYTE, MAX_FILENAME_LEN+1> padded;
 
 		int paddedLen = 0;
-		BYTE *padded = pad16((BYTE*)utf8_str.c_str(), (int)utf8_str.size(), paddedLen);
-
-		if (!padded)
-			return NULL;
-
-		BYTE *ct = EmeTransform(&con->m_eme, (BYTE*)dir_iv, padded, paddedLen, true);
-
-		free(padded);
-
-		if (!ct) {
+		
+		if (!pad16((BYTE*)utf8_str.c_str(), (int)utf8_str.size(), paddedLen, padded)) {
+			DbgPrint(L"\tencrypt_filename: pad16 failed : %S\n", utf8_str.c_str());
 			return NULL;
 		}
 
-		rs = base64_encode(ct, paddedLen, storage, true, !con->GetConfig()->m_Raw64);
+		EmeBuffer_t buffer;
 
-		delete[] ct;
+		if (!EmeTransform(&con->m_eme, (BYTE*)dir_iv, padded.get(), paddedLen, true, buffer)) {
+			DbgPrint(L"\tencrypt_filename: EmeTransform failed : %s\n", file_without_stream.c_str());
+			return NULL;
+		}
+
+		BYTE* ct = buffer.get();
+
+		rs = base64_encode(ct, paddedLen, storage, true, !con->GetConfig()->m_Raw64);		
+
+		if (!rs) {
+			DbgPrint(L"\tencrypt_filename: base64_encode failed : %s\n", file_without_stream.c_str());
+			return NULL;
+		}		
 
 	} else {
 		// CBC names no longer supported
+		DbgPrint(L"\tencrypt_filename: CPC names no longer supported\n");
 		return NULL;	
 	}
 
 	if (con->GetConfig()->m_LongNames && storage.length() > MAX_FILENAME_LEN) {
 		string utf8;
-		if (!unicode_to_utf8(storage.c_str(), utf8))
+		if (!unicode_to_utf8(storage.c_str(), utf8)) {
+			DbgPrint(L"\tencrypt_filename: unicode_to_utf8 failed for longname : %s\n", storage.c_str());
 			return NULL;
+		}
 		if (actual_encrypted) {
 			*actual_encrypted = utf8;
 		}
 		BYTE sum[32];
-		if (!sha256(utf8, sum))
+		if (!sha256(utf8, sum)) {
+			DbgPrint(L"ecnrypt_filename: long name sha256 failed: %S\n", utf8.c_str());
 			return NULL;
+		}
 		wstring base64_sum;
-		if (!base64_encode(sum, sizeof(sum), base64_sum, true, !con->GetConfig()->m_Raw64))
+		if (!base64_encode(sum, sizeof(sum), base64_sum, true, !con->GetConfig()->m_Raw64)) {
+			DbgPrint(L"\tencrypt_filename: base64_encode failed for longname sum: %s\n", storage.c_str());
 			return NULL;
+		}
 		storage = longname_prefix;
 		storage += base64_sum;
 
@@ -198,6 +215,7 @@ encrypt_filename(const CryptContext *con, const unsigned char *dir_iv, const WCH
 			rs = storage.c_str();
 		} else {
 			storage = L"";
+			DbgPrint(L"\tencrypt_filename: failed to encrypt sctream name: ", stream.c_str());
 			rs = NULL;
 		}
 		
@@ -206,11 +224,62 @@ encrypt_filename(const CryptContext *con, const unsigned char *dir_iv, const WCH
 	return rs;
 }
 
+class ValidFileNameCharChecker
+{
+private:
+	bool invalid_lut[128];
+public:
+	ValidFileNameCharChecker()
+	{
+		memset(invalid_lut, 0, sizeof(invalid_lut));
+
+		invalid_lut['<'] = true; // (less than)
+		invalid_lut['>'] = true; // (greater than)
+		invalid_lut[':'] = true; // (colon)
+		invalid_lut['"'] = true; // (double quote)
+		invalid_lut['/'] = true; // (forward slash)
+		invalid_lut['\\'] = true; // (backslash)
+		invalid_lut['|'] = true; // (vertical bar or pipe)
+		invalid_lut['?'] = true; // (question mark)
+		invalid_lut['*'] = true; // (asterisk)		
+	}
+
+	virtual ~ValidFileNameCharChecker() = default;
+
+	// disallow copying
+	ValidFileNameCharChecker(ValidFileNameCharChecker const&) = delete;
+	void operator=(ValidFileNameCharChecker const&) = delete;
+
+	bool is_valid(const WCHAR* s, bool bStream) const
+	{
+		if (!s)
+			return false;
+
+		// from https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+
+		for (; *s; s++) {
+			static_assert(sizeof(WCHAR) <= sizeof(size_t), "cannot fit a WCHAR in a size_t");
+			size_t c = static_cast<size_t>(*s);
+			// control chars are allowed only in stream names
+			if (!bStream && c >= 1 && c <= 31)
+				return false;
+			// chars outside 7-bit ascii are all allowed
+			if (c > 127)
+				continue;
+			if (invalid_lut[c])
+				return false;
+		}
+		return true;
+	}
+	
+};
 
 
 const WCHAR * // returns UNICODE plaintext filename
 decrypt_filename(CryptContext *con, const BYTE *dir_iv, const WCHAR *path, const WCHAR *filename, wstring& storage)
 {
+	static ValidFileNameCharChecker char_checker;
+
 	if (con->GetConfig()->m_PlaintextNames) {
 		storage = filename;
 		return &storage[0];
@@ -232,7 +301,7 @@ decrypt_filename(CryptContext *con, const BYTE *dir_iv, const WCHAR *path, const
 			if (decrypt_reverse_longname(con, file_without_stream.c_str(), path, dir_iv, storage))
 				return &storage[0];
 			else
-				return false;
+				return nullptr;
 		} else {
 			wstring fullpath = path;
 			if (fullpath[fullpath.size() - 1] != '\\')
@@ -272,29 +341,35 @@ decrypt_filename(CryptContext *con, const BYTE *dir_iv, const WCHAR *path, const
 
 	if (con->GetConfig()->m_EMENames) {
 
-		BYTE *pt = EmeTransform(&con->m_eme, (BYTE*)dir_iv, &ctstorage[0], (int)ctstorage.size(), false);
+		EmeBuffer_t buffer;
 
-		if (!pt)
+		if (!EmeTransform(&con->m_eme, (BYTE*)dir_iv, &ctstorage[0], (int)ctstorage.size(), false, buffer))
 			return NULL;
+
+		BYTE* pt = buffer.get();
 
 		int origLen = unPad16(pt, (int)ctstorage.size());
 
-		if (origLen < 0) {
-			delete[] pt;
+		if (origLen < 0) {			
 			return NULL;
 		}
 
 
 		pt[origLen] = '\0';
 
-		const WCHAR *ws = utf8_to_unicode((const char *)pt, storage);
+		const WCHAR *ws = utf8_to_unicode((const char *)pt, storage);		
 
-		delete[] pt;
+		if (!char_checker.is_valid(ws, false))
+			return NULL;
 
 		if (have_stream && ws) {
 			wstring dec_stream;
 			if (decrypt_stream_name(con, dir_iv, stream.c_str(), dec_stream)) {
-				storage += dec_stream;
+				if (!char_checker.is_valid(dec_stream.c_str(), true)) {
+					storage += L":"; // if failure use invalid empty stream name
+				} else {
+					storage += dec_stream;
+				}
 				ws = storage.c_str();
 			} else {
 				storage += L":"; // if failure use invalid empty stream name
@@ -434,6 +509,8 @@ decrypt_path(CryptContext *con, const WCHAR *path, wstring& storage)
 
 		} else {
 
+			KeyDecryptor kdc(&config->m_keybuf_manager);
+
 			// we can short-circuit the process in the case where the final file or dir is a long file name
 			// and it is found in the long file name (lfn) cache
 
@@ -538,9 +615,8 @@ encrypt_path(CryptContext *con, const WCHAR *path, wstring& storage, string *act
 
 	CryptConfig *config = con->GetConfig();
 
-
 	try {
-		
+
 		storage = config->GetBaseDir();
 
 		if (config->m_PlaintextNames || (path[0] == '\\' && path[1] == '\0')) {
@@ -549,23 +625,25 @@ encrypt_path(CryptContext *con, const WCHAR *path, wstring& storage, string *act
 
 		} else {
 
+			KeyDecryptor kdc(&config->m_keybuf_manager);
+
 			if (*path && path[0] == '\\') {
 				storage.push_back('\\');
 				path++;
 			}
 
-			const TCHAR *p = path;
+			const TCHAR* p = path;
 
 
 			unsigned char dir_iv[DIR_IV_LEN];
 
 			if (!get_dir_iv(con, &storage[0], dir_iv))
-				throw(-1);
+				throw(L"get_dir_iv failed for " + storage);
 
 
 			if (!con->GetConfig()->m_EMENames) {
 				// CBC names no longer supported
-				throw(-1);
+				throw(wstring(L"CBC names no longer supported"));
 			}
 
 			wstring s;
@@ -581,12 +659,12 @@ encrypt_path(CryptContext *con, const WCHAR *path, wstring& storage, string *act
 				while (*p && *p != '\\') {
 					s.push_back(*p++);
 				}
-	
+
 				if (actual_encrypted)
 					actual_encrypted->clear();
 
 				if (!encrypt_filename(con, dir_iv, &s[0], uni_crypt_elem, actual_encrypted))
-					throw(-1);
+					throw(L"encrypt_filename failed: " + s);
 
 				storage.append(uni_crypt_elem);
 
@@ -594,7 +672,7 @@ encrypt_path(CryptContext *con, const WCHAR *path, wstring& storage, string *act
 					storage.push_back(*p++); // append slash
 
 					if (!get_dir_iv(con, &storage[0], dir_iv))
-						throw(-1);
+						throw(L"get_dir_iv failed for " + storage);
 
 				}
 
@@ -603,8 +681,10 @@ encrypt_path(CryptContext *con, const WCHAR *path, wstring& storage, string *act
 
 		rval = &storage[0];
 
+	} catch (const wstring& mes) {
+		DbgPrint(L"\t%s\n", mes.c_str());
+		rval = NULL;
 	} catch (...) {
-
 		rval = NULL;
 	}
 	
@@ -817,7 +897,7 @@ encrypt_stream_name(const CryptContext *con, const unsigned char *dir_iv, const 
 	wstring type;
 
 	if (!remove_stream_type(stream, stream_without_type, type))
-		return false;
+		return NULL;
 
 	LPCWSTR rs;
 	
@@ -852,7 +932,7 @@ decrypt_stream_name(CryptContext *con, const BYTE *dir_iv, const WCHAR *stream, 
 	wstring type;
 
 	if (!remove_stream_type(stream, stream_without_type, type))
-		return false;
+		return NULL;
 
 	LPCWSTR rs;
 		

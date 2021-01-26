@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -59,7 +59,7 @@ void CCryptPropertyPage::DefaultAction()
 {
 }
 
-void CCryptPropertyPage::ProcessCommandLine(DWORD pid, LPCTSTR szCmd, BOOL bOnStartup)
+void CCryptPropertyPage::ProcessCommandLine(LPCTSTR szCmd, BOOL bOnStartup, HANDLE hPipe)
 {
 }
 

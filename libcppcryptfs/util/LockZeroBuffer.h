@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -27,7 +27,12 @@ THE SOFTWARE.
 */
 
 #pragma once
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include "wintypes.h"
+#endif
 #include <string>
 
 using namespace std;
@@ -44,7 +49,7 @@ public:
 
 	BOOL IsLocked() { return m_IsLocked; };
 	T *m_buf;
-	unsigned int m_len;
+	DWORD m_len;
 
 	void Clear() 
 	{
@@ -52,7 +57,7 @@ public:
 			SecureZeroMemory(m_buf, sizeof(T)*m_len);
 	}
 
-	LockZeroBuffer(unsigned int len, bool throw_if_not_locked = false)
+	LockZeroBuffer(DWORD len, bool throw_if_not_locked)
 	{
 		m_len = len;
 		m_buf = new T[m_len];
@@ -78,8 +83,8 @@ public:
 		}
 		if (!m_IsLocked && throw_if_not_locked) {
 			delete[] m_buf;
-			bad_alloc exception;
-			throw exception;
+			string mes = "LockZeroBuffer: unable to lock buffer of " + to_string(sizeof(T) * m_len) + " bytes";
+			throw std::exception(mes.c_str());
 		}
 		memset(m_buf, 0, sizeof(T)*m_len);
 	}

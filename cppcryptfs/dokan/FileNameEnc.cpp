@@ -2,7 +2,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -72,7 +72,10 @@ void FileNameEnc::AssignPlainPath(LPCWSTR plain_path) {
 
 FileNameEnc::FileNameEnc(PDOKAN_FILE_INFO DokanFileInfo, const WCHAR *fname,
 	string *actual_encrypted,
-	bool forceCaseCacheNotFound) {
+	bool forceCaseCacheNotFound) : m_KeyDecryptor(
+		GetContext()->GetConfig()->m_PlaintextNames ? nullptr :
+		&GetContext()->GetConfig()->m_keybuf_manager, 
+		true) {
 	m_dokan_file_info = DokanFileInfo;
 	m_con = GetContext();
 	AssignPlainPath(fname);
@@ -83,11 +86,17 @@ FileNameEnc::FileNameEnc(PDOKAN_FILE_INFO DokanFileInfo, const WCHAR *fname,
 	m_force_case_cache_notfound = forceCaseCacheNotFound;
 }
 
-FileNameEnc::~FileNameEnc() {}
+FileNameEnc::~FileNameEnc() 
+{
+	
+}
 
-const WCHAR *FileNameEnc::Convert() {
+const WCHAR *FileNameEnc::Convert() 
+{
 
 	if (!m_tried) {
+
+		m_KeyDecryptor.Enter();
 
 		m_tried = true;
 
@@ -99,17 +108,17 @@ const WCHAR *FileNameEnc::Convert() {
 				} else if (rt_is_virtual_file(m_con, m_plain_path.c_str())) {
 					wstring dirpath;
 					if (!get_file_directory(m_plain_path.c_str(), dirpath))
-						throw(-1);
+						throw(L"virtual reverse get_file_directory failed: " + m_plain_path);
 					if (!decrypt_path(m_con, &dirpath[0], m_enc_path))
-						throw(-1);
+						throw(L"virtual reverse decrypt_path failed: " + dirpath);
 					m_enc_path += L"\\";
 					wstring filename;
 					if (!get_bare_filename(m_plain_path.c_str(), filename))
-						throw(-1);
+						throw(L"virtual reverse get_bare_filename failed: " + m_plain_path);
 					m_enc_path += filename;
 				} else {
 					if (!decrypt_path(m_con, m_plain_path.c_str(), m_enc_path)) {
-						throw(-1);
+						throw(L"reverse decrypt path failed " + m_plain_path);
 					}
 				}
 			} else {
@@ -147,7 +156,7 @@ const WCHAR *FileNameEnc::Convert() {
 
 						if (!remove_stream_type(stream.c_str(), stream_without_type,
 							type)) {
-							throw(-1);
+							throw(L"remove stream type failed: " + stream);
 						}
 
 						if (CryptFindStreamsInternal(
@@ -157,7 +166,7 @@ const WCHAR *FileNameEnc::Convert() {
 							wstring uc_stream;
 
 							if (!touppercase(stream_without_type.c_str(), uc_stream))
-								throw(-1);
+								throw(L"touppercase failed: " + stream_without_type);
 
 							auto it = streams_map.find(uc_stream);
 
@@ -173,9 +182,12 @@ const WCHAR *FileNameEnc::Convert() {
 					}
 				}
 				if (!encrypt_path(m_con, plain_path, m_enc_path, m_actual_encrypted)) {
-					throw(-1);
+					throw(L"encrypt path failed " + wstring(plain_path) + L" m_enc_path = " + m_enc_path);
 				}
 			}
+		} catch (const wstring& mes) {
+			DbgPrint(L"\t%s\n", mes.c_str());
+			m_failed = true;
 		} catch (...) {
 			m_failed = true;
 		}

@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -48,6 +48,21 @@ THE SOFTWARE.
 
 #define NEVER_SAVE_HISTORY_DEFAULT 0
 #define NEVER_SAVE_HISTORY_RECOMMENDED 0
+
+#define DELETE_SPURRIOUS_FILES_DEFAULT 0
+#define DELETE_SUPRRIOUS_FILES_RECOMMENDED 0
+
+#define OPEN_ON_MOUNTING_DEFAULT 0
+#define OPEN_ON_MOUNTING_RECOMMENDED 0
+
+#define ENCRYPT_KEYS_IN_MEMORY_DEFAULT 0
+#define ENCRYPT_KEYS_IN_MEMORY_RECOMMENDED 0
+
+#define CACHE_KEYS_IN_MEMORY_DEFAULT 0
+#define CACHE_KEYS_IN_MEMORY_RECOMMENDED 0
+
+#define FAST_MOUNTING_DEFAULT 1
+#define FAST_MOUNTING_RECOMMENDED 1
 
 // warnings (not really settings)
 #define MOUNTMANAGERWARN_DEFAULT 1

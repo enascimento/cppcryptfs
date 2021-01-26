@@ -1,7 +1,7 @@
 /*
 cppcryptfs : user-mode cryptographic virtual overlay filesystem.
 
-Copyright (C) 2016-2019 Bailey Brown (github.com/bailey27/cppcryptfs)
+Copyright (C) 2016-2020 Bailey Brown (github.com/bailey27/cppcryptfs)
 
 cppcryptfs is based on the design of gocryptfs (github.com/rfjakob/gocryptfs)
 
@@ -41,8 +41,10 @@ THE SOFTWARE.
 #include "stdafx.h"
 #include <windows.h>
 
+#include "util/util.h"
 #include "eme.h"
 #include "crypt.h"
+#include "config/cryptconfig.h"
 #include "openssl/aes.h"
 
 #include "aes.h"
@@ -144,7 +146,7 @@ EmeCryptContext::~EmeCryptContext()
 }
 
 // tabulateL - calculate L_i for messages up to a length of m cipher blocks
-void EmeCryptContext::tabulateL(int m){
+void EmeCryptContext::tabulateL(int m, CryptConfig *pConfig){
 
 	/* set L0 = 2*AESenc(K; 0) */
 	BYTE eZero[16];
@@ -160,6 +162,8 @@ void EmeCryptContext::tabulateL(int m){
 
 	m_pLTableBuf = new LockZeroBuffer<BYTE>(m * 16, true);
 
+	pConfig->m_keybuf_manager.RegisterBuf(m_pLTableBuf);
+
 	BYTE *pool = m_pLTableBuf->m_buf;
 
 	for (int i = 0; i < m; i++) {
@@ -174,11 +178,14 @@ void EmeCryptContext::tabulateL(int m){
 
 
 
-bool EmeCryptContext::init(const BYTE *key, bool hkdf)
+bool EmeCryptContext::init(const BYTE *key, bool hkdf, CryptConfig *pConfig)
 {
 	const BYTE *emeKey = key;
 
-	LockZeroBuffer<BYTE> hkdfKey(MASTER_KEY_LEN);
+	if (!pConfig)
+		throw std::exception("EMeCryptContext init: where is my config?");
+
+	LockZeroBuffer<BYTE> hkdfKey(MASTER_KEY_LEN, false);
 
 	if (hkdf) {
 		if (!hkdfKey.IsLocked())
@@ -191,11 +198,13 @@ bool EmeCryptContext::init(const BYTE *key, bool hkdf)
 
 	m_pKeyBuf = new LockZeroBuffer<AES_KEY>(2, true);
 
+	pConfig->m_keybuf_manager.RegisterBuf(m_pKeyBuf);
+
 	AES::initialize_keys(emeKey, 256, &m_pKeyBuf->m_buf[0], &m_pKeyBuf->m_buf[1]);
 
 	m_aes_ctx.set_keys(&m_pKeyBuf->m_buf[0], &m_pKeyBuf->m_buf[1]);
 
-	tabulateL(16 * 8);
+	tabulateL(16 * 8, pConfig);
 
 	return true;
 
@@ -207,7 +216,7 @@ bool EmeCryptContext::init(const BYTE *key, bool hkdf)
 // (defined in the constants directionEncrypt and directionDecrypt).
 // The data in "P" is en- or decrypted with the block ciper "bc" under tweak "T".
 // The result is returned in a freshly allocated slice.
-BYTE* EmeTransform(const EmeCryptContext *eme_context, const BYTE *T, const BYTE *P, int len, bool direction)  {
+bool EmeTransform(const EmeCryptContext *eme_context, const BYTE *T, const BYTE *P, int len, bool direction, EmeBuffer_t& buffer)  {
 
 	BYTE *C = NULL;
 
@@ -222,7 +231,7 @@ BYTE* EmeTransform(const EmeCryptContext *eme_context, const BYTE *T, const BYTE
 			panic(L"EME operates on 1-128 block-cipher blocks");
 		}
 
-		C = new BYTE[len+1]; // +1 so caller can add a null terminator if necessary without any trouble
+		C = buffer.get(len+1); // +1 so caller can add a null terminator if necessary without any trouble
 
 		BYTE **LTable = eme_context->m_LTable;
 
@@ -283,10 +292,8 @@ BYTE* EmeTransform(const EmeCryptContext *eme_context, const BYTE *T, const BYTE
 	}
 
 	if (!error) {
-		return C;
-	} else {
-		if (C)
-			delete[] C;
-		return NULL;
+		return true;
+	} else {		
+		return false;
 	}
 }
